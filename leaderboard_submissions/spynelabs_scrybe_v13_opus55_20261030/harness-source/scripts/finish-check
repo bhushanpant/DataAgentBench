@@ -1,0 +1,883 @@
+#!/usr/bin/env python3
+"""finish-check: the mechanical pre_finish check of the untuned core. It never judges content, interpretation or
+correctness, it never asks for a different result, and it never writes to the warehouse: it does not build, run,
+seed or snapshot anything.
+
+Exit 0 = accept (prints nothing); exit 1 = reject (stdout = the mechanical problems); exit 2 = internal error (the
+runtime accepts). It rejects ONLY for:
+  (i)   no final message: the runtime provided the final reply and it is empty;
+  (ii)  the final message begins as a runtime error text or as a first-person statement that the task could not be
+        done (both a statement of inability and a task object are required);
+  (iii) a dbt project whose files changed (added, modified or deleted) during the run, or that was created during the
+        run, does not parse, or the generated SQL of an AFFECTED node is broken. Affected nodes come from the
+        manifest's dependency graph: nodes whose file changed; nodes that use a changed macro (transitively through
+        macros); nodes patched by a changed properties file or reading a source it defines; after a change of
+        dbt_project.yml / packages / a materialization or naming macro, every project node (bounded). For each one
+        the check first reuses evidence, the project's own run_results.json when that dbt command started after the
+        last change of the node's relevant files; nodes without it are validated READ-ONLY with
+        `dbt show --limit 1` (dbt compiles and runs the node's SELECT; no hooks, no writes). Seeds and Python models
+        cannot be validated read-only (`dbt show` of a seed loads it) and are recorded as unchecked. LOG-ONLY:
+        warehouse lock / connection / time-out errors, dbt "approximate match" errors (they also feed (v-b)),
+        "relation does not exist" errors whose relations are all project nodes (not built in the warehouse), database
+        errors of a node that
+        reads a changed upstream node not rebuilt since its change (the SELECT reads the older relation), an
+        incremental model whose incremental branch fails while its full-refresh SELECT works, and every result of
+        the direct children of rebuilt nodes. Projects whose profile type differs from $DB_TYPE are not checked;
+  (iv)  a path of the explicit output contract (env SCRYBE_OUTPUT_CONTRACT = a JSON file {"required_paths": [...]},
+        and/or [finish_check] required_paths) does not exist: every time;
+  (v)   a file path written out in the task text (directory part + file extension), in a mention that does not
+        prohibit, remove or replace it, does not exist now and did not exist at start: one notice per path per run
+        when [finish_check] inferred_paths = "notice"; never shown when it is "log". A path that lies only inside dbt
+        projects whose profile type differs from $DB_TYPE is logged, never shown;
+  (v-b) a schema / relation name case conflict on an adapter that matches names case-insensitively but keeps their
+        created case (DuckDB): for a model / snapshot whose own file changed or was created, the warehouse catalog has
+        its schema (or, in that schema, its alias) only in another letter case, or the agent's own latest dbt run
+        reported "approximate match" for an affected node. dbt's case-sensitive relation cache makes every later run of
+        such a node fail; one notice per project when [finish_check] case_conflict = "notice" ("log": recorded only).
+With the answer contract [finish_check] answer_contract = "final_answer" (the final reply IS the deliverable, e.g. a
+question answered from databases), (i) and (ii) use the answer forms instead (an empty reply; a reply that begins as
+a runtime error text or as a first-person statement that the question could not be answered), and one more mechanical
+case rejects: (vi) the runtime reports that the session's last tool call failed and that the answer text it saw was
+written before that call (SCRYBE_ANSWER_AFTER_LAST_CALL = "0" and SCRYBE_LAST_CALL_OK = "0"; not checked when the
+runtime does not say). The answer's content is never judged. Without the setting (default "") nothing changes.
+Everything else it measures is written to $SCRYBE_STATE_DIR/finish_check.jsonl and never shown to the agent. The
+outcome is also written to $SCRYBE_STATE_DIR/finish_status.json: "validated" (every check ran and passed),
+"completed_unchecked" (no mechanical problem, but the listed conditions were not checked) or "rejected". The number
+of rejections is capped by the runtime (hooks.max_finish_rejections).
+
+Inputs: SCRYBE_ANSWER_FILE (+ SCRYBE_ANSWER_STATUS = provided | unavailable), the start snapshot written by
+scrybe-start, harness config [finish_check]."""
+import json
+import os
+import re
+import sys
+import time
+from datetime import datetime
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scrybe_core as core  # noqa: E402
+
+T0 = time.time()
+RUNTIME_ERROR = re.compile(r"^(?:api error\b|error: |traceback \(most recent call last\)|prompt is too long\b|"
+                           r"credit balance is too low\b|request timed out\b|overloaded\b)", re.I)
+INCAPACITY = re.compile(
+    r"^(?:(?:i['’]?m sorry|sorry|unfortunately),? (?:but )?)?(?:i|we)(?:['’]m| am| was| were)? (?:unable|not able|"
+    r"could ?n[o'’]?t|can(?:['’]t| ?not)|wasn['’]t able|was unable|did ?n[o'’]?t manage|failed)\b", re.I)
+TASK_OBJECT = re.compile(r"\b(?:the|this|your|an|any) (?:task|request|work|change|changes|model|models|project|fix)\b|"
+                         r"\bto (?:complete|finish|implement|fix|build|create|make|do|access|connect|run)\b", re.I)
+# answer contract "final_answer" (ported from harness/dab-untuned-sage/scripts/finish_check): the reply is the answer
+ANS_RUNTIME_ERROR = re.compile(
+    r"^(?:api error: |traceback \(most recent call last\):|prompt is too long\b|credit balance is too low\b)", re.I)
+# both a statement of inability and a task object are required, so that an answer which merely starts with "I" (a
+# title such as "I'm Sorry") never matches
+ANS_INCAPACITY = re.compile(
+    r"^(?:(?:i['’]?m sorry|sorry|unfortunately),? (?:but )?)?i(?:['’]m| am| was)? (?:unable|not able|"
+    r"could ?n[o'’]?t|can(?:['’]t| ?not)|wasn['’]t able|was unable|did ?n[o'’]?t manage)\b", re.I)
+ANS_TASK_OBJECT = re.compile(
+    r"\b(?:the|this|your|an|any) (?:task|question|request|answer|query|data|database|databases|result)\b|"
+    r"\bto (?:complete|finish|answer|determine|compute|calculate|access|connect|retrieve)\b", re.I)
+INFRA = re.compile(r"could not set lock|database is locked|conflicting lock|lock on file|timed out|timeout|"
+                   r"connection (?:refused|reset|error)|could not connect|network|authentication|"
+                   r"failed to connect|ssl", re.I)
+SQL_ERROR = re.compile(r"Compilation Error|Binder Error|Parser Error|Catalog Error|Conversion Error|does not exist|"
+                       r"syntax error|invalid identifier", re.I)
+# project-level files: a change can affect every node
+PROJECT_FILES = ("dbt_project.yml", "packages.yml", "dependencies.yml", "package-lock.yml", "selectors.yml", "profiles.yml")
+# macros dbt calls for every node without a depends_on entry (materializations, relation naming, ref / source)
+GLOBAL_MACRO = re.compile(r"^(?:materialization_\w+|generate_(?:schema|alias|database)_name|ref|source|"
+                          r"get_custom_\w+)$")
+# dbt commands whose run_results.json records an executed node
+EVIDENCE_COMMANDS = {"build", "run", "seed", "snapshot", "show", "retry"}
+NODE_TYPES = ("model", "snapshot", "seed")
+SHOW_ERROR = re.compile(r"(?:[\w ]*Error) in (model|snapshot) (\S+) \(([^)\n]+)\)")
+
+
+def log(rec):
+    try:
+        with open(core.state_path("finish_check.jsonl"), "a") as fh:
+            fh.write(json.dumps({"ts": round(time.time(), 2), **rec}, default=str) + "\n")
+    except OSError:
+        pass
+
+
+def write_status(status, unchecked, n_problems=0):
+    try:
+        core.save_json("finish_status.json", {"status": status, "unchecked": unchecked[:100], "problems": n_problems,
+                                              "ts": round(time.time(), 2)})
+    except OSError:
+        pass
+
+
+def left():
+    dl = core.deadline_left()
+    return 10_000 if dl is None else dl
+
+
+def read_answer():
+    st = os.environ.get("SCRYBE_ANSWER_STATUS", "provided" if os.environ.get("SCRYBE_ANSWER_FILE") else "unavailable")
+    f = os.environ.get("SCRYBE_ANSWER_FILE")
+    if st != "provided" or not f:
+        return None, st
+    try:
+        with open(f, encoding="utf-8", errors="replace") as fh:
+            return fh.read(), st
+    except OSError:
+        return None, "unreadable"
+
+
+def answer_problems(answer):
+    if answer is None:
+        return []
+    a = answer.strip()
+    if not a:
+        return ["Your final message is empty. End with a short summary of what you did."]
+    head = a.lstrip("*_#>`\"' \t\n")[:300]
+    if RUNTIME_ERROR.match(head) or (INCAPACITY.match(head) and TASK_OBJECT.search(head[:240])):
+        first = a.splitlines()[0][:160]
+        return [f"Your final message reads as an error or as a statement that the task could not be completed "
+                f"(it begins: {first!r}). If the work is complete, end with a short summary of what you did; if it is "
+                f"not, continue working."]
+    return []
+
+
+def final_answer_problems(answer, rec):
+    """Answer contract "final_answer": the mechanical problems of the final reply as the deliverable."""
+    if answer is None:
+        return []
+    out = []
+    a = answer.strip()
+    if not a:
+        out.append("The final reply is empty: no answer was received.")
+    else:
+        head = a.lstrip("*_#>`\"' \t")[:300]
+        if ANS_RUNTIME_ERROR.match(head) or (ANS_INCAPACITY.match(head) and ANS_TASK_OBJECT.search(head[:200])):
+            first = a.splitlines()[0][:120]
+            out.append(f"The final reply reads as an error or a statement that the task could not be done, not as an "
+                       f"answer (it begins: {first!r}).")
+    after, last_ok = os.environ.get("SCRYBE_ANSWER_AFTER_LAST_CALL"), os.environ.get("SCRYBE_LAST_CALL_OK")
+    rec["answer_after_last_call"], rec["last_call_ok"] = after, last_ok
+    if a and after == "0" and last_ok == "0":
+        out.append("The last tool call failed and no reply followed it.")
+    return out
+
+
+def target_dir(proj):
+    return core.state_path("fc", re.sub(r"\W+", "_", proj).strip("_"), "target", "x")[:-2]
+
+
+def dbt(args, proj, timeout):
+    """A dbt command with the check's own target and log paths (the project's target/ is never touched)."""
+    tgt = target_dir(proj)
+    logs = os.path.join(os.path.dirname(tgt), "logs")
+    env = {"DBT_PROFILES_DIR": core.profiles_dir(proj), "DBT_SEND_ANONYMOUS_USAGE_STATS": "false"}
+    rc, out = core.sh(["dbt", *args, "--target-path", tgt, "--log-path", logs], cwd=proj, timeout=timeout, env=env)
+    return rc, re.sub(r"\x1b\[[0-9;]*m", "", out), tgt
+
+
+def redact(text):
+    """Connection secrets never reach the log or the agent: values of credential variables, Snowflake hosts."""
+    for k, v in os.environ.items():
+        if v and len(v) >= 4 and (re.search(r"PASSWORD|PASSPHRASE|PRIVATE_KEY|TOKEN|SECRET", k)
+                                  or k in ("SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER")):
+            text = text.replace(v, "[redacted]")
+    return re.sub(r"[\w.-]+\.snowflakecomputing\.com", "[redacted].snowflakecomputing.com", text)
+
+
+def tail(text, n=1500):
+    text = redact(text)
+    lines = [ln for ln in text.splitlines() if ln.strip() and not re.search(
+        r"Deprecat|deprecation|--show-all|Performance info|Running with dbt=|Registered adapter|Found \d+ |"
+        r"Concurrency: |partial parsing|^\s*$|^\d\d:\d\d:\d\d\s*$", ln)]
+    s = "\n".join(lines)
+    return s if len(s) <= n else "[...]\n" + s[-n:]
+
+
+def changed_files(proj, start):
+    """-> (added or modified files, deleted files, created-during-run flag)."""
+    now = core.file_hashes(proj)
+    before = (start.get("hashes") or {}).get(proj)
+    if before is None:  # project created during the run
+        return sorted(now), [], True
+    return sorted(f for f, h in now.items() if before.get(f) != h), sorted(f for f in before if f not in now), False
+
+
+MISSING_REL = re.compile(r"(?:Table|View|Relation) with name \"?([\w$.\"]+?)\"? does not exist|"
+                         r"relation \"([\w$.\"]+)\" does not exist|Object '([\w$.\"]+)' does not exist|"
+                         r"Not found: (?:Table|View) ([\w$.:-]+)", re.I)
+
+
+def missing_project_relation(msg, names):
+    """True when the error is 'relation does not exist' and every relation it names is a project node."""
+    found = [next(g for g in m.groups() if g) for m in MISSING_REL.finditer(msg)]
+    found = [re.split(r"[.:]", x.replace('"', ""))[-1].lower() for x in found]
+    return bool(found) and all(x in names for x in found)
+
+
+def mtime(path):
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return None
+
+
+def iso_ts(s):
+    try:
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+# ------------------------------------------------------------------ the manifest graph
+
+class Graph:
+    """Nodes, macros and sources of the manifest the check's own `dbt parse` wrote."""
+
+    def __init__(self, manifest, root):
+        self.root = root or (manifest.get("metadata") or {}).get("project_name")
+        self.nodes = {u: n for u, n in (manifest.get("nodes") or {}).items() if n.get("resource_type") in NODE_TYPES}
+        self.tests = {u: n for u, n in (manifest.get("nodes") or {}).items() if n.get("resource_type") == "test"}
+        self.macros = manifest.get("macros") or {}
+        self.sources = manifest.get("sources") or {}
+        self.parents = {u: [p for p in (n.get("depends_on") or {}).get("nodes") or []] for u, n in self.nodes.items()}
+        self.children = {}
+        for u, ps in self.parents.items():
+            for p in ps:
+                self.children.setdefault(p, []).append(u)
+        self.rel_names = set()
+        for n in self.nodes.values():
+            self.rel_names.update(x.lower() for x in (n.get("alias"), n.get("name")) if x)
+
+    def file_of(self, uid):
+        return (self.nodes.get(uid) or {}).get("original_file_path") or ""
+
+    def patch_file(self, uid):
+        p = (self.nodes.get(uid) or {}).get("patch_path") or ""
+        return p.split("://", 1)[-1] if p else ""
+
+    def macro_closure(self, uid):
+        """Every macro the node uses, directly or through other macros."""
+        seen, todo = set(), list(((self.nodes.get(uid) or {}).get("depends_on") or {}).get("macros") or [])
+        while todo:
+            m = todo.pop()
+            if m in seen:
+                continue
+            seen.add(m)
+            todo += ((self.macros.get(m) or {}).get("depends_on") or {}).get("macros") or []
+        return seen
+
+    def relational_parents(self, uid, _seen=None):
+        """Upstream nodes whose warehouse relation the node's SELECT reads (ephemeral parents are inlined, so their
+        own parents count instead)."""
+        seen = _seen if _seen is not None else set()
+        out = []
+        for p in self.parents.get(uid) or []:
+            if p in seen or p not in self.nodes:
+                continue
+            seen.add(p)
+            if (self.nodes[p].get("config") or {}).get("materialized") == "ephemeral":
+                out += self.relational_parents(p, seen)
+            else:
+                out.append(p)
+        return out
+
+
+def affected_nodes(G, files, deleted):
+    """-> ({uid: [reasons]}, unchecked notes, project_wide flag, tests touched) from the changed and deleted files."""
+    files = set(files)
+    aff, notes, tests = {}, [], set()
+
+    def add(uid, why):
+        aff.setdefault(uid, [])
+        if why not in aff[uid]:
+            aff[uid].append(why)
+
+    project_wide = [f for f in files if f in PROJECT_FILES]
+    for u in G.nodes:
+        if G.file_of(u) in files:
+            add(u, "file")
+        if G.patch_file(u) in files:
+            add(u, f"properties {G.patch_file(u)}")
+    for u, t in G.tests.items():
+        if t.get("original_file_path") in files:
+            tests.add(u)
+    changed_src = {s for s, n in G.sources.items() if n.get("original_file_path") in files}
+    for u, ps in G.parents.items():
+        for p in ps:
+            if p in changed_src:
+                add(u, f"source {p.split('.', 2)[-1]}")
+    changed_macros = {m for m, n in G.macros.items() if n.get("original_file_path") in files
+                      and n.get("package_name") == G.root}
+    if changed_macros:
+        users = {}
+        for u in G.nodes:
+            used = G.macro_closure(u) & changed_macros
+            for m in used:
+                users.setdefault(m, []).append(u)
+                add(u, f"macro {G.macros[m].get('name')}")
+        test_users = {m for t in G.tests.values() for m in ((t.get("depends_on") or {}).get("macros") or [])}
+        for m in sorted(changed_macros):
+            name = G.macros[m].get("name") or ""
+            if GLOBAL_MACRO.match(name):
+                project_wide.append(f"macro {name}")
+            elif not users.get(m) and m not in test_users:
+                notes.append({"what": f"macro {name}", "reason": "no node is known to use it (dbt records no dependency)"})
+    if project_wide:
+        for u, n in G.nodes.items():
+            if n.get("package_name") == G.root:
+                add(u, "project-wide change (" + ", ".join(sorted(set(project_wide))[:3]) + ")")
+    if deleted:
+        notes.append({"what": f"{len(deleted)} deleted file(s)", "reason": "their former dependents are known only "
+                      "through the parse", "files": deleted[:20]})
+    return aff, notes, bool(project_wide), sorted(tests)
+
+
+# ------------------------------------------------------------------ evidence and read-only validation
+
+def read_evidence(proj, meta):
+    """The project's own last run_results.json: {"which", "started", "results": {uid: (status, message)}} or None."""
+    rr = os.path.join(meta.get("target-path") or os.path.join(proj, "target"), "run_results.json")
+    try:
+        with open(rr) as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    args, md = d.get("args") or {}, d.get("metadata") or {}
+    which = str(args.get("which") or "")
+    if which not in EVIDENCE_COMMANDS:
+        return {"which": which, "results": {}, "unused": f"`dbt {which}` does not execute nodes"}
+    active = core.profile_of(proj)[1]
+    if args.get("target") and active and args.get("target") != active:
+        return {"which": which, "results": {}, "unused": f"target {args.get('target')} is not the active target"}
+    started = iso_ts(md.get("invocation_started_at"))
+    if started is None:
+        end = iso_ts(md.get("generated_at")) or mtime(rr) or 0
+        started = end - float(d.get("elapsed_time") or 0) - 5
+    res = {str(r.get("unique_id")): (r.get("status"), redact(str(r.get("message") or ""))) for r in d.get("results") or []}
+    return {"which": which, "started": started, "results": res}
+
+
+def last_change(G, uid, proj, files, deleted_dirs_t):
+    """Latest modification time of the changed files that define the node: its file, its properties file, the files
+    of the macros it uses, the files of the sources it reads, the project-level files; deletions count as changes
+    at their directory's time."""
+    rel = {G.file_of(uid), G.patch_file(uid), *PROJECT_FILES}
+    rel |= {(G.macros.get(m) or {}).get("original_file_path") for m in G.macro_closure(uid)}
+    rel |= {(G.sources.get(p) or {}).get("original_file_path") for p in G.parents.get(uid) or []}
+    ts = [mtime(os.path.join(proj, f)) for f in files if f in rel]
+    return max([t for t in ts if t] + [deleted_dirs_t or 0])
+
+
+def show(proj, uids, G, timeout, full_refresh=False):
+    """Read-only validation: `dbt show --limit 1` of the nodes (models / snapshots), batched; a failing node aborts
+    dbt's whole invocation, so it is identified from the output and the rest is run again.
+    -> {uid: ("success" | "error" | "infra" | "not_run", message)}."""
+    out_res, pending, single = {}, list(uids), False
+    by_path = {(G.nodes[u]["resource_type"], G.file_of(u)): u for u in uids}
+    while pending:
+        if left() < 40:
+            out_res.update({u: ("not_run", "too little time left before the deadline") for u in pending})
+            break
+        batch = pending[:1] if single else pending
+        sels = [f"path:{G.file_of(u)},resource_type:{G.nodes[u]['resource_type']}" for u in batch]
+        rr_path = os.path.join(target_dir(proj), "run_results.json")
+        if os.path.isfile(rr_path):
+            os.remove(rr_path)
+        rc, out, _ = dbt(["show", "-s", *sels, "--limit", "1", *(["--full-refresh"] if full_refresh else [])], proj,
+                         min(timeout, left() - 30))
+        results = None
+        try:
+            with open(rr_path) as fh:
+                d = json.load(fh)
+            if (d.get("args") or {}).get("which") == "show":
+                results = {str(r.get("unique_id")): (r.get("status"), str(r.get("message") or ""))
+                           for r in d.get("results") or []}
+        except (OSError, ValueError):
+            pass
+        if rc == 0:
+            for u in batch:
+                st, msg = (results or {}).get(u, ("not_run", "no result from `dbt show`"))
+                out_res[u] = (st if st in ("success", "not_run") else "error", msg)
+            pending = [u for u in pending if u not in batch]
+            continue
+        msg = out.split("Encountered an error:", 1)[-1].strip() if "Encountered an error:" in out else tail(out)
+        m = SHOW_ERROR.search(out)
+        hit = by_path.get((m.group(1), m.group(3).strip())) if m else None
+        if hit is None and len(batch) == 1:
+            hit = batch[0]
+        if rc == 124 or (INFRA.search(out) and not SQL_ERROR.search(out)):
+            out_res.update({u: ("infra", tail(out, 600)) for u in batch})
+            pending = [u for u in pending if u not in batch]
+        elif hit is not None and hit in pending:
+            out_res[hit] = ("error", tail(out[m.end():] if m else msg, 900))
+            pending.remove(hit)
+        else:
+            single = True  # unattributed failure of a batch: one node at a time
+    return out_res
+
+
+def classify(G, uid, msg, stale):
+    """The log-only class of a validation error, or None when it is a mechanical failure of the node's SQL."""
+    if INFRA.search(msg) and not SQL_ERROR.search(msg):
+        return "infra"
+    if "approximate match" in msg:
+        # a relation of the same name in a different case already exists in the warehouse: dbt refuses to guess.
+        # Warehouse state, not the agent's SQL; never ask the agent to change schema or identifier config because of it
+        return "approximate_match"
+    if missing_project_relation(msg, G.rel_names):
+        # the relation it reads is a project node that is not built in the warehouse: warehouse state, not something
+        # the agent's files broke
+        return "upstream_not_built"
+    if stale and "Compilation Error" not in msg:
+        # it reads a changed upstream node whose relation was built from older code (not rebuilt since the change)
+        return "upstream_changed_unbuilt"
+    return None
+
+
+BUILD_COMMANDS = {"build", "run", "snapshot", "retry"}
+# Adapters whose warehouse matches schema / relation names case-insensitively but keeps the case they were created
+# with, while dbt's relation cache compares them case-sensitively: once a schema or relation exists in another case,
+# the first build lands in it and every later `dbt run` of the node fails with "approximate match" (`quoting` does not
+# change this). Reproduced with dbt-duckdb (tests/test_gate_schema_case.py). Not Snowflake (unquoted names are
+# upper-case normalised and dbt follows it) nor Postgres (quoted names are distinct schemas).
+CASE_FOLD_ADAPTERS = {"duckdb"}
+APPROX_MATCH = re.compile(r"approximate match", re.I)
+APPROX_DETAIL = re.compile(r"Searched for:\s*(\S+).*?Found:\s*(\S+)", re.S)
+_CATALOG = {}
+
+
+def catalog(proj):
+    """{"schemata": [(catalog, schema)], "relations": [(catalog, schema, name)]} of the project's warehouse, read-only
+    and cached per project; None when the warehouse cannot be read."""
+    if proj not in _CATALOG:
+        try:
+            wh = core.Warehouse(proj)
+            try:
+                _, sch, _ = wh.query("select catalog_name, schema_name from information_schema.schemata", 100000)
+                _, rel, _ = wh.query("select table_catalog, table_schema, table_name from information_schema.tables "
+                                     "where lower(table_schema) not in ('information_schema', 'pg_catalog')", 200000)
+            finally:
+                wh.close()
+            _CATALOG[proj] = {"schemata": [tuple(str(x) for x in r) for r in sch],
+                              "relations": [tuple(str(x) for x in r) for r in rel]}
+        except Exception:  # noqa: BLE001  no catalog: not decided here
+            _CATALOG[proj] = None
+    return _CATALOG[proj]
+
+
+def _unq(x):
+    return str(x or "").replace('"', "")
+
+
+def case_conflicts(G, aff, ev, start_t, proj, ptype):
+    """{uid: {"want", "found", "from"}} for the nodes whose warehouse names differ from what dbt builds only by letter
+    case (adapters of CASE_FOLD_ADAPTERS): an "approximate match" error of the node in the agent's own latest dbt run,
+    or, for models / snapshots whose own file changed or was created, a schema (or a relation in that schema) in the
+    warehouse catalog equal to the node's schema (alias) case-insensitively but not exactly."""
+    if ptype not in CASE_FOLD_ADAPTERS:
+        return {}
+    out = {}
+    if ev and ev.get("results") and float(ev.get("started") or 0) >= start_t:
+        for u in aff:
+            st, msg = (ev["results"].get(u) or (None, ""))
+            if st == "error" and APPROX_MATCH.search(msg or ""):
+                m = APPROX_DETAIL.search(msg)
+                want, found = (_unq(m.group(1)), _unq(m.group(2))) if m else (None, None)
+                diff = [(a, b) for a, b in zip((want or "").split("."), (found or "").split("."))
+                        if a != b and a.lower() == b.lower()]
+                out[u] = {"want": want, "found": f"`{found}`" if found else "a relation in another case",
+                          "from": f"your latest `dbt {ev.get('which')}`", "pair": list(diff[0]) if diff else None}
+    cand = [u for u, why in aff.items() if u not in out and "file" in why
+            and G.nodes[u]["resource_type"] in ("model", "snapshot")
+            and (G.nodes[u].get("config") or {}).get("materialized") != "ephemeral"]
+    cat = catalog(proj) if cand else None
+    if not cat:
+        return out
+    for u in cand:
+        n = G.nodes[u]
+        db, schema = str(n.get("database") or ""), str(n.get("schema") or "")
+        alias = str(n.get("alias") or n.get("name") or "")
+        if not schema:
+            continue
+        in_db = (lambda c: not db or c.lower() == db.lower())
+        same = sorted({s for c, s in cat["schemata"] if in_db(c) and s.lower() == schema.lower()}
+                      | {s for c, s, _ in cat["relations"] if in_db(c) and s.lower() == schema.lower()})
+        if same and schema not in same:
+            out[u] = {"want": f"{schema}.{alias}", "found": f"schema `{same[0]}`", "from": "the warehouse catalog",
+                      "pair": [schema, same[0]]}
+            continue
+        rels = sorted({nm for c, s, nm in cat["relations"] if in_db(c) and s == schema and nm.lower() == alias.lower()})
+        if rels and alias not in rels:
+            out[u] = {"want": f"{schema}.{alias}", "found": f"relation `{schema}.{rels[0]}`", "from": "the warehouse catalog",
+                      "pair": [alias, rels[0]]}
+    return out
+
+
+def case_notice(G, proj, conflicts):
+    parts = []
+    for u, c in sorted(conflicts.items())[:15]:
+        want = f"dbt builds `{c['want']}`; " if c.get("want") else ""
+        parts.append(f"`{G.nodes[u].get('name')}` ({want}the warehouse has {c.get('found')}; seen in {c['from']})")
+    pair = next((c["pair"] for _, c in sorted(conflicts.items()) if c.get("pair")), None)
+    example = f"here `{pair[1]}`, not `{pair[0]}`" if pair else "e.g. `ANALYTICS`, not `analytics`"
+    return (f"In {proj}, the warehouse already has a schema or relation whose name differs only in letter case from "
+            f"where dbt builds these models: " + "; ".join(parts) + ". This warehouse matches names case-insensitively "
+            "but keeps the case they were created with, while dbt compares them case-sensitively: the first build lands "
+            "in the existing name, and every later `dbt run` of these models fails with \"approximate match\" "
+            "(`quoting` settings do not change this). The fix is to use the warehouse's existing case exactly "
+            f"({example}) in the profile / schema / alias config these models use; do not drop relations or override "
+            "dbt macros for this. Then build them again (this is reported once).")
+
+
+def unbuilt_models(G, aff, ev, fresh, proj):
+    """{uid: reason} for models / snapshots whose own file changed or was created and that have neither a successful
+    build of the current files in the project's latest run_results nor, when that run does not cover them, a relation in
+    the warehouse. A node the latest run errored or skipped counts as not built (its relation, if any, is older)."""
+    cand = [u for u, why in aff.items() if "file" in why and G.nodes[u]["resource_type"] in ("model", "snapshot")
+            and (G.nodes[u].get("config") or {}).get("materialized") != "ephemeral"]
+    if not cand:
+        return {}
+    out, need_rel = {}, []
+    built_by = (ev or {}).get("which") in BUILD_COMMANDS
+    for u in cand:
+        got = fresh.get(u) if built_by else None
+        if got and got[0] in ("success", "pass"):
+            continue
+        last = ((ev or {}).get("results") or {}).get(u) if built_by else None
+        if last and last[0] in ("error", "skipped"):
+            out[u] = f"your latest `dbt {ev.get('which')}` reported it {last[0]}"
+        else:
+            need_rel.append(u)
+    if need_rel:
+        cat = catalog(proj)
+        if not cat:  # no catalog: not decided here
+            return out
+        rels = {(s.lower(), n.lower()) for _, s, n in cat["relations"]}
+        for u in need_rel:
+            n = G.nodes[u]
+            if (str(n.get("schema") or "").lower(), str(n.get("alias") or n.get("name") or "").lower()) not in rels:
+                out[u] = "no relation for it in the warehouse"
+    return out
+
+
+def project_problems(cfg, rec, unchecked):
+    probs = []
+    start = core.load_json("start/hashes.json", {}) or {}
+    start_t = float(start.get("t") or 0)
+    db_type = (os.environ.get("DB_TYPE") or "").lower()
+    timeout = float(cfg.get("validate_timeout_s", cfg.get("build_timeout_s", 240)))
+    rec["projects"] = []
+    for proj in core.find_projects():
+        files, deleted, created = changed_files(proj, start)
+        pr = {"project": proj, "created": created, "changed": files[:200], "n_changed": len(files), "deleted": deleted[:200]}
+        rec["projects"].append(pr)
+        if not files and not deleted:
+            continue
+        ptype = core.project_backend(proj)
+        if db_type and ptype and ptype != db_type:
+            pr["skipped"] = f"profile type {ptype} differs from DB_TYPE {db_type}"
+            unchecked.append(f"{proj}: not checked ({pr['skipped']})")
+            continue
+        if left() < 45:
+            pr["skipped"] = "too little time left before the deadline"
+            unchecked.append(f"{proj}: not checked ({pr['skipped']})")
+            continue
+        rc, out, tgt = dbt(["parse"], proj, min(float(cfg.get("parse_timeout_s", 180)), left() - 30))
+        pr["parse_rc"] = rc
+        if rc == 124 or (rc != 0 and INFRA.search(out) and "Compilation Error" not in out and "Parsing Error" not in out):
+            pr["parse_infra"] = tail(out, 600)
+            unchecked.append(f"{proj}: parse not completed (infrastructure)")
+            continue
+        if rc != 0:
+            probs.append(f"The dbt project {proj} does not parse (`dbt parse` failed):\n{tail(out)}")
+            continue
+        if not cfg.get("validate_changed", cfg.get("build_changed", True)):
+            unchecked.append(f"{proj}: node validation disabled")
+            continue
+        try:
+            with open(os.path.join(tgt, "manifest.json")) as fh:
+                manifest = json.load(fh)
+        except (OSError, ValueError) as e:
+            pr["manifest_error"] = f"{type(e).__name__}"
+            unchecked.append(f"{proj}: no manifest after parse; nodes not validated")
+            continue
+        meta = core.project_meta(proj)
+        G = Graph(manifest, meta.get("name"))
+        aff, notes, project_wide, tests = affected_nodes(G, files, deleted)
+        pr["affected"] = {u: r for u, r in list(aff.items())[:200]}
+        pr["n_affected"] = len(aff)
+        pr["selected"] = sorted({G.file_of(u) for u in aff})[:200]
+        cov = {"evidence": [], "validated": [], "unchecked": list(notes), "tests_not_run": len(tests),
+               "project_wide": project_wide}
+        pr["coverage"] = cov
+        log_only = []
+        pr["log_only_results"] = log_only
+        unchecked += [f"{proj}: {n['what']}: {n['reason']}" for n in notes]
+        if not aff:
+            continue
+        ev = read_evidence(proj, meta)
+        pr["evidence"] = None if ev is None else {k: v for k, v in ev.items() if k != "results"}
+        dirs_t = max([mtime(os.path.join(proj, os.path.dirname(f))) or 0 for f in deleted] + [0])
+        to_show, errs = [], []
+        # direct changes first, so that a bounded project-wide selection keeps them
+        order = sorted(aff, key=lambda u: (not any(r == "file" or r.startswith(("macro", "properties", "source"))
+                                                   for r in aff[u]), u))
+        fresh = {}
+        for u in order:
+            got = (ev or {}).get("results", {}).get(u)
+            if got is not None and ev.get("started", 0) >= max(start_t, last_change(G, u, proj, files, dirs_t)):
+                fresh[u] = got
+        fresh_ok = {u for u, got in fresh.items() if got[0] in ("success", "pass")}
+        # affected nodes whose warehouse relation was not rebuilt from the current files
+        stale_set = {u for u in aff if u not in fresh_ok}
+        for u in order:
+            n = G.nodes[u]
+            got = fresh.get(u)
+            if u in fresh_ok:
+                cov["evidence"].append(u)
+                continue
+            readable = n["resource_type"] in ("model", "snapshot") and n.get("language", "sql") == "sql"
+            if not readable:
+                if got and got[0] == "error":
+                    why = classify(G, u, got[1], any(p in stale_set for p in G.relational_parents(u)))
+                    if why:
+                        log_only.append({"node": u, "status": "error", why: got[1][:300], "source": "evidence"})
+                        unchecked.append(f"{u}: not validated ({why})")
+                    else:
+                        errs.append(f"- {n['resource_type']} {n.get('name')} (your latest `dbt {ev.get('which')}` of "
+                                    f"the current files): {' '.join(got[1].split())[:700]}")
+                    continue
+                kind = "seed (`dbt show` of a seed loads it)" if n["resource_type"] == "seed" else "python model"
+                cov["unchecked"].append({"node": u, "reason": f"{kind}: no read-only validation and no fresh evidence"})
+                unchecked.append(f"{u}: not validated ({kind}, no fresh run evidence)")
+                continue
+            to_show.append(u)
+        cap = int(cfg.get("max_validate_nodes", 60))
+        for u in to_show[cap:]:
+            cov["unchecked"].append({"node": u, "reason": f"beyond max_validate_nodes ({cap})"})
+        if to_show[cap:]:
+            unchecked.append(f"{proj}: {len(to_show) - cap} affected node(s) beyond max_validate_nodes not validated")
+        to_show = to_show[:cap]
+        if to_show and left() < 45:
+            for u in to_show:
+                cov["unchecked"].append({"node": u, "reason": "too little time left before the deadline"})
+            unchecked.append(f"{proj}: affected nodes not validated (deadline)")
+            to_show = []
+        res = show(proj, to_show, G, timeout) if to_show else {}
+        retry = [u for u, (st, msg) in res.items() if st == "error" and "Compilation Error" not in msg
+                 and (G.nodes[u].get("config") or {}).get("materialized") == "incremental"]
+        if retry:
+            # the incremental branch reads the model's existing relation; its full-refresh SELECT is checked as well
+            fr = show(proj, retry, G, timeout, full_refresh=True)
+            for u in retry:
+                st, msg = fr.get(u, ("not_run", ""))
+                if st == "success":
+                    log_only.append({"node": u, "status": "error", "incremental_branch_error": res[u][1][:300]})
+                    unchecked.append(f"{u}: incremental branch not validated (it reads the existing relation)")
+                    res[u] = ("logged", "")
+        for u in to_show:
+            st, msg = res.get(u, ("not_run", ""))
+            n = G.nodes[u]
+            if st == "success":
+                cov["validated"].append(u)
+                hooks = [h for k in ("pre-hook", "post-hook") for h in (n.get("config") or {}).get(k) or []]
+                if hooks:
+                    cov["unchecked"].append({"node": u, "reason": f"{len(hooks)} hook(s) not run"})
+                    unchecked.append(f"{u}: hooks not run")
+            elif st == "logged":
+                continue
+            elif st in ("infra", "not_run"):
+                log_only.append({"node": u, "status": st, ("infra" if st == "infra" else "message"): msg[:300]})
+                unchecked.append(f"{u}: not validated ({st})")
+            else:
+                stale = any(p in stale_set for p in G.relational_parents(u))
+                why = classify(G, u, msg, stale)
+                if why:
+                    log_only.append({"node": u, "status": "error", why: msg[:300]})
+                    unchecked.append(f"{u}: not validated ({why})")
+                else:
+                    via = [r for r in aff[u] if r != "file"]
+                    errs.append(f"- {n['resource_type']} {n.get('name')}{' (via ' + ', '.join(via[:3]) + ')' if via else ''}: "
+                                f"{' '.join(msg.split())[:700]}")
+        if cfg.get("children", "log") != "off" and fresh_ok and left() > 60:
+            # log-only: unchanged direct children of nodes rebuilt from the current code
+            kids = sorted({c for u in fresh_ok for c in G.children.get(u, []) if c in G.nodes and c not in aff
+                           and G.nodes[c]["resource_type"] in ("model", "snapshot")
+                           and G.nodes[c].get("language", "sql") == "sql"})[:int(cfg.get("max_children", 20))]
+            if kids:
+                kr = show(proj, kids, G, timeout)
+                cov["children"] = {u: kr.get(u, ("not_run", ""))[0] for u in kids}
+                for u in kids:
+                    st, msg = kr.get(u, ("not_run", ""))
+                    if st != "success":
+                        log_only.append({"node": u, "status": st, "child_of_changed": msg[:300]})
+        case_mode = str(cfg.get("case_conflict", "notice"))
+        noticed_case = set()
+        if case_mode != "off":
+            cc = case_conflicts(G, aff, ev, start_t, proj, ptype or db_type)
+            pr["case_conflicts"] = cc
+            if cc:
+                unchecked += [f"{u}: warehouse name differs only in letter case ({c['from']})" for u, c in cc.items()]
+                if case_mode == "notice":
+                    # these models are covered by the case notice (once per project), not by the unbuilt notice
+                    noticed_case = set(cc)
+                    reported = set(core.load_json("finish_check_case.json", []) or [])
+                    if proj not in reported:
+                        probs.append(case_notice(G, proj, cc))
+                        core.save_json("finish_check_case.json", sorted(reported | {proj}))
+        if cfg.get("unbuilt", "notice") != "off":
+            ub = unbuilt_models(G, aff, ev, fresh, proj)
+            pr["unbuilt"] = ub
+            if ub:
+                unchecked += [f"{u}: {why}" for u, why in ub.items()]
+                reported = set(core.load_json("finish_check_unbuilt.json", []) or [])
+                # a model of the case notice is not reported as unbuilt (the case notice asks to fix and rebuild it)
+                new = {u: w for u, w in ub.items() if u not in reported and u not in noticed_case}
+                if new and cfg.get("unbuilt", "notice") == "notice":
+                    probs.append(
+                        f"These models in {proj} that you changed or created are not built from the current files "
+                        f"(no successful `dbt run`/`build` of them since your last change): "
+                        + "; ".join(f"`{G.nodes[u].get('name')}` ({w})" for u, w in sorted(new.items())[:15])
+                        + ". If the task's deliverables are built models, build them (an upstream error that blocks them "
+                        "is part of the task); if not, end again (this is reported once).")
+                    core.save_json("finish_check_unbuilt.json", sorted(reported | set(new)))
+        if errs:
+            probs.append(f"Read-only validation (`dbt show --limit 1`, or your own latest dbt run of the current files; "
+                         f"the check writes nothing) of the dbt nodes you changed, or that use what you changed, "
+                         f"reported errors in {proj}:\n" + "\n".join(errs[:15])
+                         + (f"\n(and {len(errs) - 15} more)" if len(errs) > 15 else ""))
+    return probs
+
+
+# ------------------------------------------------------------------ output paths
+
+def contract_paths(cfg, rec, unchecked):
+    """Required output paths of the explicit contract: [finish_check] required_paths + $SCRYBE_OUTPUT_CONTRACT."""
+    paths = [str(p) for p in cfg.get("required_paths") or [] if p]
+    f = os.environ.get("SCRYBE_OUTPUT_CONTRACT")
+    if f:
+        try:
+            with open(f) as fh:
+                d = json.load(fh)
+            paths += [str(p) for p in (d.get("required_paths") or []) if p]
+        except (OSError, ValueError, AttributeError) as e:
+            rec["contract_error"] = f"{type(e).__name__}"
+            unchecked.append("output contract unreadable; its paths are not checked")
+    return list(dict.fromkeys(paths))
+
+
+PROJECT_DIR_KEYS = ("model-paths", "seed-paths", "snapshot-paths", "macro-paths", "test-paths", "analysis-paths")
+
+
+def path_projects(p, projects):
+    """The dbt projects a task-named path lies in: the (innermost) project containing it when it is absolute or, from
+    /app or the working directory, leads into a project; else, for a path relative to a project root, every project
+    whose own directories (models, seeds, macros ...) or project files hold its first component."""
+    def innermost(c):
+        c = os.path.realpath(os.path.normpath(c))
+        inside = [q for q in projects if c.startswith(q.rstrip("/") + "/")]
+        return [max(inside, key=len)] if inside else []
+    if os.path.isabs(p):
+        return innermost(p)
+    hit = sorted({q for b in ("/app", os.getcwd()) for q in innermost(os.path.join(b, p))})
+    if hit:
+        return hit
+    first = p.lstrip("./").split("/", 1)[0]
+    out = []
+    for q in projects:
+        meta = core.project_meta(q)
+        dirs = {str(d).strip("./").split("/", 1)[0] for k in PROJECT_DIR_KEYS for d in meta.get(k) or []}
+        if first in dirs or (first == p and first in PROJECT_FILES):
+            out.append(q)
+    return out
+
+
+def path_problems(cfg, rec, unchecked):
+    projects = core.find_projects()
+    db_type = (os.environ.get("DB_TYPE") or "").lower()
+    probs = []
+    required = contract_paths(cfg, rec, unchecked)
+    missing_req = [p for p in required if not core.path_exists(p, projects)]
+    rec["contract_paths"] = {"required": required, "missing": missing_req}
+    if missing_req:
+        probs.append("The output contract of this environment requires these files, and no file exists at them: "
+                     + ", ".join(f"`{p}`" for p in missing_req) + ".")
+    task = core.task_text()
+    mentions = core.task_path_mentions(task)
+    named = [p for p in core.task_paths(task) if p not in required]
+    at_start = core.load_json("start/paths.json", {}) or {}
+    reported = set(core.load_json("finish_check_paths.json", []) or [])
+    missing, not_obliged, other_backend = [], [], []
+    for p in named:
+        if core.path_exists(p, projects):
+            continue
+        if at_start.get(p):  # existed at start, gone now: possibly intended (log-only)
+            rec.setdefault("named_paths_removed", []).append(p)
+            continue
+        kind, ctx = mentions.get(p, ("obligation", ""))
+        if kind == "not_obliged":  # prohibited / removed / replaced in the task text: not an obligation
+            not_obliged.append({"path": p, "context": ctx[:160]})
+            continue
+        if db_type:
+            # a path inside projects of another backend only: that project is not built or checked in this run, so
+            # a notice would only lead to untested files there (log-only)
+            types = {q: core.project_backend(q) for q in path_projects(p, projects)}
+            if types and all(t and t != db_type for t in types.values()):
+                other_backend.append({"path": p, "projects": types})
+                unchecked.append(f"task-named path in a project of another backend (not checked): {p}")
+                continue
+        missing.append(p)
+    mode = str(cfg.get("inferred_paths", "notice"))
+    rec["named_paths"] = {"named": named, "missing": missing, "already_reported": sorted(reported & set(missing)),
+                          "not_obliged": not_obliged, "other_backend": other_backend, "mode": mode}
+    new = [p for p in missing if p not in reported] if mode == "notice" else []
+    unchecked += [f"task-named path missing (inferred, not enforced): {p}" for p in missing if p not in new]
+    if new:
+        probs.append("The task text names these file paths, and no file exists at them (none existed at start either): "
+                     + ", ".join(f"`{p}`" for p in new) + ". If the task requires these files, create them; if it does "
+                     "not, end again (this is reported once).")
+        core.save_json("finish_check_paths.json", sorted(reported | set(new)))
+    return probs
+
+
+def main():
+    cfg = core.section("finish_check")
+    if not cfg.get("enabled", True):
+        log({"decision": "accept", "reason": "disabled", "status": "completed_unchecked"})
+        write_status("completed_unchecked", ["finish check disabled"])
+        return 0
+    answer, ast = read_answer()
+    rec = {"answer_status": ast, "answer_chars": None if answer is None else len(answer.strip())}
+    unchecked = [] if answer is not None else [f"final message not checked (answer {ast})"]
+    contract = str(cfg.get("answer_contract") or "")
+    rec["answer_contract"] = contract or None
+    probs = final_answer_problems(answer, rec) if contract == "final_answer" else answer_problems(answer)
+    try:
+        probs += project_problems(cfg, rec, unchecked)
+    except Exception as e:  # noqa: BLE001  the project check fails open, logged
+        rec["project_check_error"] = f"{type(e).__name__}: {str(e)[:300]}"
+        unchecked.append("project check failed internally")
+    try:
+        probs += path_problems(cfg, rec, unchecked)
+    except Exception as e:  # noqa: BLE001
+        rec["path_check_error"] = f"{type(e).__name__}: {str(e)[:300]}"
+        unchecked.append("path check failed internally")
+    status = "rejected" if probs else ("completed_unchecked" if unchecked else "validated")
+    rec.update(decision="reject" if probs else "accept", status=status, unchecked=unchecked[:100], problems=probs,
+               secs=round(time.time() - T0, 1))
+    log(rec)
+    write_status(status, unchecked, len(probs))
+    if probs:
+        print("Finish check (mechanical; it does not judge your results):\n" + "\n".join(f"* {p}" for p in probs)
+              + ("\nReply with your final answer." if contract == "final_answer" else ""))
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as e:  # noqa: BLE001  a bug in the check never blocks the run
+        log({"decision": "error", "error": f"{type(e).__name__}: {e}"[:300]})
+        write_status("completed_unchecked", [f"finish check internal error ({type(e).__name__})"])
+        print(f"finish-check internal error: {type(e).__name__}", file=sys.stderr)
+        sys.exit(2)

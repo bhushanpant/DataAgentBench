@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""sql: read-only query against the warehouse of the dbt project(s) in this environment.
+
+  sql "select ..." [max_rows]        (or the SQL on stdin; default 50 rows)
+  sql "describe <schema.table>"      columns and types (from information_schema)
+
+DuckDB is opened read-only (it retries while dbt holds the write lock) and closed after the query; Snowflake uses the
+active profile's connection settings. The connection comes from the dbt project in the current directory when there
+is one, else the first project whose profile type matches the backend. A trailing LIMIT n also sets max_rows."""
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scrybe_core as core  # noqa: E402
+
+q = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] != "-" else sys.stdin.read()
+mx = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 50
+q = q.strip().rstrip(";").strip()
+if not q:
+    print(__doc__)
+    sys.exit(2)
+m = re.match(r"(?is)^(?:describe|desc|show\s+columns\s+(?:from|in))\s+([\w.\"]+)\s*$", q)
+if not m and not re.match(r"(?is)^(\s|--[^\n]*(\n|$)|/\*.*?\*/)*(\(\s*)*(select|with|show|describe|desc|explain|values|table|from|pragma|summarize)\b", q):
+    print("sql runs read-only statements only (SELECT / WITH / SHOW / DESCRIBE ...); data changes go through dbt")
+    sys.exit(1)
+depth, last = 0, None
+for mm in re.finditer(r"[()]|\blimit\s+(\d+)\s*$", q, re.I):
+    if mm.group(0) == "(":
+        depth += 1
+    elif mm.group(0) == ")":
+        depth -= 1
+    elif depth == 0:
+        last = mm
+if last:
+    mx = min(int(last.group(1)), 10000)
+try:
+    wh = core.Warehouse(core.cwd_project())
+except core.LockError as e:
+    print(f"{e}\n(another process holds the DuckDB write lock, e.g. a running dbt command; retry when it has finished)")
+    sys.exit(1)
+except Exception as e:  # noqa: BLE001
+    print(f"cannot connect to the warehouse: {type(e).__name__}: {str(e).strip()[:600]}")
+    sys.exit(1)
+try:
+    if m:
+        parts = [p.strip('"') for p in m.group(1).split(".")]
+        name, schema = parts[-1], (parts[-2] if len(parts) > 1 else None)
+        where = f"lower(table_name) = '{name.lower()}'" + (f" and lower(table_schema) = '{schema.lower()}'" if schema else "")
+        cols, rows, more = wh.query("select table_schema, table_name, column_name, data_type from information_schema.columns "
+                                    f"where {where} order by table_schema, table_name, ordinal_position", 5000)
+        if not rows:
+            print(f"no relation named {m.group(1)}")
+            sys.exit(1)
+        cur = None
+        for s, t, c, ty in rows:
+            if (s, t) != cur:
+                print(f"{s}.{t}")
+                cur = (s, t)
+            print(f"  {c} {ty}")
+        sys.exit(0)
+    cols, rows, more = wh.query(q, mx)
+    print(core.fmt_rows(cols, rows, more) if cols else "ok")
+except Exception as e:  # noqa: BLE001
+    print(f"SQL error: {str(e).strip()[:2000]}")
+    sys.exit(1)
+finally:
+    wh.close()

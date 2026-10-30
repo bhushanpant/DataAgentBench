@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""on_start hook (untuned core). Prints the start-up context the agent sees after the task text:
+
+  1. ENVIRONMENT: the dbt projects found, the warehouse backend and connection, the databases of the environment's
+     database config (logical names and types only; scrybe_core.db_config_path) when it has one, the time budget,
+     and instruction files the environment provides (AGENTS.md / CLAUDE.md at /app or in a project root), stated as
+     found;
+  2. SAGE: a one-line status (always printed, also when the layer is disabled or fails) and the overview.
+
+Side effects, all under $SCRYBE_STATE_DIR (never in the project): start/hashes.json (project file hashes, for the
+finish check), start/paths.json (which task-named file paths existed at start), sage/layer.json, sage/overview.md,
+sage/status.json, sage/focus.json, and (with question_focus) sage/question.json. The task text is read to record the start state of the file paths it names and to
+select the Sage focus section (the assets whose names occur in it, sage_render.select_focus); the Sage catalog itself
+is built without it. The opt-in question focus follows upstream lineage and prioritizes literal task columns for
+profiling, with explicitly labelled lexical discovery candidates when named sources are sparse."""
+import json
+import os
+import sys
+import time
+import traceback
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scrybe_core as core  # noqa: E402
+
+T0 = time.time()
+DOC_CHARS = 8000
+out = []
+
+# ---------------------------------------------------------------- environment
+projects = core.find_projects()
+backend = core.active_backend(projects)
+hashes = {}
+for p in projects:
+    try:
+        hashes[p] = core.file_hashes(p)
+    except Exception as e:  # noqa: BLE001
+        hashes[p] = {"__error__": str(e)[:200]}
+core.save_json("start/hashes.json", {"projects": projects, "hashes": hashes, "t": T0})
+task = core.task_text()
+named = core.task_paths(task)
+core.save_json("start/paths.json", {p: core.path_exists(p, projects) for p in named})
+
+out.append("ENVIRONMENT (found at start)")
+dbcfg = core.db_config_path()
+if projects:
+    for p in projects:
+        meta = core.project_meta(p)
+        prof, tgt, o = core.profile_of(p)
+        out.append(f"- dbt project {p}: name {meta.get('name')}, profile {prof} (target {tgt}, type {o.get('type') or 'unknown'})")
+elif not dbcfg:
+    out.append("- no dbt project (dbt_project.yml) found under /app, /workspace or the working directory")
+if dbcfg:
+    inv = core.db_inventory(dbcfg)
+    out.append(f"- databases ({len(inv)}, from the database config {dbcfg}; logical name and type): "
+               + (", ".join(f"{n} ({t or 'unknown'})" for n, t in inv) or "none readable"))
+if projects or not dbcfg:
+    src = "DB_TYPE" if os.environ.get("DB_TYPE") else "profile"
+    out.append(f"- warehouse backend: {backend or 'unknown'} (from {src})")
+left = core.deadline_left()
+if left is not None and left > 0:
+    out.append(f"- time budget: about {int(left // 60)} minutes from now (the harness deadline for this run)")
+docs = []
+for d in ["/app"] + projects:
+    for f in ("AGENTS.md", "CLAUDE.md"):
+        fp = os.path.join(d, f)
+        if os.path.isfile(fp) and fp not in docs:
+            docs.append(fp)
+for fp in docs:
+    try:
+        txt = open(fp, encoding="utf-8", errors="replace").read().strip()
+    except OSError:
+        continue
+    out.append(f"\n--- {fp} (provided in the environment)")
+    if len(txt) > DOC_CHARS:
+        txt = txt[:DOC_CHARS] + f"\n[... {len(txt) - DOC_CHARS} more chars; read the file for the rest]"
+    out.append(txt)
+
+# ---------------------------------------------------------------- Sage
+cfg = core.section("sage")
+status = {"enabled": bool(cfg.get("enabled", False))}
+if not cfg.get("enabled", False):
+    import sage_render as R
+    line = R.status_line({}, None, {}, enabled=False)
+    status.update(status="disabled", ok=False)
+    out += ["", line]
+else:
+    try:
+        import sage_build
+        import sage_render as R
+        dl = core.deadline_left()
+        deadline = (time.time() + dl - 30) if dl else None
+        layer, off = sage_build.build(cfg, deadline=deadline)
+        question_focus = bool(cfg.get("question_focus", False))
+        if question_focus:
+            import sage_question as Q
+            focus = Q.make_focus(layer, off, task, int(cfg.get("focus_max_assets", R.FOCUS_MAX_ASSETS)),
+                                 int(cfg.get("focus_upstream_depth", 2)))
+        else:
+            focus = R.select_focus(layer, off, task, int(cfg.get("focus_max_assets", R.FOCUS_MAX_ASSETS)))
+        want = R.focus_relations(layer, focus)
+        if want and int(cfg.get("focus_profile_max_relations", 8)) > 0:
+            sage_build.profile_named(cfg, layer, want, deadline, task=task if question_focus else None)
+        if question_focus:
+            focus["evidence"] = Q.evidence(layer, focus)
+            core.save_json("sage/question.json", focus["evidence"])
+        core.save_json(sage_build.LAYER_FILE, layer)
+        text, info = R.overview(layer, off, int(cfg.get("overview_chars", 20000)), float(cfg.get("dbt_share", 0.4)),
+                                focus=focus, focus_chars=int(cfg.get("focus_chars", R.FOCUS_CHARS)))
+        with open(core.state_path("sage", "overview.md"), "w") as fh:
+            fh.write(text)
+        line = R.status_line(layer, off, info)
+        state, reasons = R.status_of(layer, off, info)
+        dbview_text = R.is_dbview(off) and not layer.get("projects") and text.startswith("SAGE status=")
+        core.save_json("sage/focus.json", {"focus": info.get("focus"), "profiling": layer.get("focus_profiling")})
+        status.update(status=state, ok=state == "ok", reasons=reasons, info=info, build_secs=layer.get("build_secs"),
+                      projects=len(layer.get("projects") or []),
+                      models=sum(len(p.get("models", [])) for p in layer.get("projects") or []),
+                      sources=sum(len(p.get("sources", [])) for p in layer.get("projects") or []),
+                      relations=len((layer.get("warehouse") or {}).get("relations") or []),
+                      profiled=(layer.get("profile_coverage") or {}).get("profiled"),
+                      warehouse_error=(layer.get("warehouse") or {}).get("error"),
+                      offline=layer.get("offline"))
+        # a database profile view's overview starts with its own status line (sage_dbview): not printed twice
+        out += ["", line, "", text] if not dbview_text else ["", line] + text.split("\n")[1:]
+    except Exception as e:  # noqa: BLE001
+        import sage_render as R
+        err = f"{type(e).__name__}: {str(e).splitlines()[0][:200] if str(e) else ''}"
+        line = R.status_line({}, None, {}, error=err)
+        status.update(status="failed", ok=False, error=err, traceback=traceback.format_exc()[-2000:])
+        out += ["", line]
+status["line"] = line
+status["secs"] = round(time.time() - T0, 1)
+core.save_json("sage/status.json", status)
+print("\n".join(out))

@@ -1,0 +1,111 @@
+# DataAgentBench overlay of harness/core-untuned: budgets, the answer contract, the offline Sage input, side-call limits
+# and the benchmark's integrity-guard additions. Readers merge harness.toml <- bench.toml. Every other file in this
+# directory is a copy of harness/core-untuned made by scripts/core-untuned-sync.sh. Values carried over from the
+# previous DAB harness (harness/dab-untuned-sage/harness.toml). Launcher:
+# scripts/core-untuned-dab.sh (one trial = scripts/core-untuned-dab-rollout.sh).
+
+# Budgets: 1200 s = the wall-clock limit the launcher enforces (DAB_MAX_SECONDS); 40 tool calls; wrap-up notice at 75%
+# of the agent deadline and at 85% of the steps (adapters/core-claude/budget_hook.py). max_cost_usd is recorded only.
+max_steps = 40
+max_seconds = 1200
+wrap_up_at = 0.75
+max_cost_usd = 1.0
+
+[runtime]
+# Untuned leaderboard configuration: a fixed skill set (platform skills only), nothing selected by task-text words.
+skill_triggers = false
+
+[hooks]
+# The environment's precomputed schema snapshot (SCHEMA.md in the working directory, when the launcher provides one),
+# then the core start-up context (databases of the database config, time budget, Sage).
+on_start = ["test ! -f SCHEMA.md || cat SCHEMA.md", "scrybe-start"]
+hook_timeout_s = 150
+on_start_max_s = 120
+# Seconds reserved before the hard kill: agent deadline = start + max_seconds - kill_reserve_s.
+kill_reserve_s = 90
+
+[sage]
+enabled = true
+# The offline Sage input: the dataset's database profile view (sage_dbview.py, extracted on the host at bundle time
+# from runs/dab-semantic-v2/<dataset>; measured content only), mounted read-only here by the launcher.
+warehouse_layer = "/sage/layer.json"
+
+[finish_check]
+# The final reply is the deliverable (the benchmark scores the answer text): answer-form mechanical checks in
+# finish-check, the analysis workflow text, and full-answer extraction into result.json (adapters/core-claude).
+answer_contract = "final_answer"
+# The benchmark's own answer rule, verbatim from its scaffold (common_scaffold/prompts/prompt_builder.py rule 9) minus the
+# return_answer tool mechanics (here the final message is the answer); stated under "The final answer".
+answer_format = "Return the final answer only. Do not include extra text, explanation, or formatting."
+# File paths written in a question are not output obligations here (the deliverable is the answer text).
+inferred_paths = "log"
+required_paths = []
+
+[flags]
+# A failed Bash command that discarded its stderr gets one line saying so (budget_hook.py).
+failure_hints = true
+
+[side_models]
+# llm_label side calls through the local claude shim: parallel calls, labeller workers, labeller cost cap per session.
+parallel = 12
+label_workers = 12
+label_max_usd = 5
+
+# ---------------------------------------------------------------- integrity guard ADDITIONS (appended to the core's
+# [[guard.deny]] rules; same 11 rules as harness/dab-untuned-sage). bash rules see the whole command (heredoc
+# included); read/write rules see the path. Command-position rules only fire at the start of a shell command.
+
+[[guard.deny_add]]
+pattern = '''(^|[\n;&|(`]|\bsudo|\bxargs|\bthen|\bdo)\s*(find|fd|fdfind|grep|egrep|fgrep|rg|ag|ack|tree|du|ls)\s+([^=\s;&|][^\n;&|]*\s)?(/\*?|~/?\S*|\$HOME\S*|/(root|home|Users|usr|opt|etc|var|mnt|srv|media|proc|sys|lib|lib64|snap|nix|boot|run|private|bin|sbin)(/\S*)?)['"]?(\s|$)'''
+reason = "searching or listing the whole filesystem or system/home directories is not allowed; work inside /work (data: /work/db_config.json)"
+tools = ["bash"]
+
+[[guard.deny_add]]
+pattern = '''(^|[\n;&|(`]|\bsudo|\bxargs)\s*(locate|plocate|mlocate|slocate|updatedb)(\s+[^=\s]|\s*$)'''
+reason = "filesystem-wide search (locate) is not allowed"
+tools = ["bash"]
+
+[[guard.deny_add]]
+pattern = '''(^|[\s'"=(:,\[])((/root|/home|/Users|/usr/share|/usr/local/share|/usr/src|/opt|/etc|/var|/mnt|/srv|/media|/snap|/nix|/boot|/private|/proc/self|/proc/[0-9]+|/sys)(/|\s|$|['")\]*])|~/|\$HOME\b|\$\{HOME\})'''
+reason = "reading outside the workspace (system, home or other directories) is not allowed; use /work, /data and the harness scripts"
+tools = ["bash"]
+
+[[guard.deny_add]]
+pattern = '''(\.\./\.\.|/(work|tmp|harness|data)(/[^\s'"]*)?/\.\.(/|\s|$|['"]))'''
+reason = "path traversal out of the workspace is not allowed"
+tools = ["bash"]
+
+[[guard.deny_add]]
+pattern = '''(os\.walk|os\.listdir|os\.scandir|glob\.i?glob|Path|rglob|iglob)\(\s*[rRfFbB]?['"](/|/\*[^'"]*|~/?[^'"]*)['"]'''
+reason = "walking or globbing the filesystem root or home is not allowed; work inside /work"
+tools = ["bash"]
+
+[[guard.deny_add]]
+pattern = '''(^|[\n;&|(`]|\bsudo|\bxargs)\s*(curl|wget|aria2c|nc|ncat|netcat|telnet|ssh|scp|sftp|rsync|ftp|lynx|w3m|links|http|https)\s+[^=\s]'''
+reason = "network fetches are not allowed; use only the databases in /work/db_config.json"
+tools = ["bash"]
+
+[[guard.deny_add]]
+pattern = '''(urllib\.request|urlopen\(|from\s+urllib\s+import\s+request|requests\.(get|post|put|head|request|Session)\b|httpx\.|http\.client|aiohttp|websocket|socket\.create_connection|ftplib|paramiko)'''
+reason = "network access from code is not allowed; use only the databases in /work/db_config.json (from dab import q)"
+tools = ["bash"]
+
+[[guard.deny_add]]
+pattern = '''(load_dataset\(|hf_hub_download|snapshot_download|huggingface_hub|from\s+datasets\s+import|import\s+datasets\b|kagglehub|sklearn\.datasets|tensorflow_datasets|torchvision\.datasets|torchtext\.datasets|nltk\.download|spacy\s+download|gdown)'''
+reason = "fetching public datasets or models is not allowed; answer from the task's databases"
+tools = ["bash"]
+
+[[guard.deny_add]]
+pattern = '''((^|[\n;&|(`]|\bsudo)\s*(uv\s+pip|pip3?|uv|conda|mamba|micromamba|apt|apt-get|npm|yarn|pnpm|gem|cargo|go)\s+(install|download|add|get|sync)\b|python3?\s+-m\s+(pip|ensurepip|http\.server)|(^|[\n;&|(`])\s*git\s+(clone|fetch|pull)\b|['"]pip3?['"]\s*,\s*['"]install)'''
+reason = "installing or downloading software is not allowed"
+tools = ["bash"]
+
+[[guard.deny_add]]
+pattern = '''(/tmp/scrybe|scrybe_consensus|side_costs|review_gate_state|review_gate\.jsonl|trace\.jsonl|result\.json|\.verdict\.json|ground_?truth|validate\.py|DataAgentBench)'''
+reason = "the harness's own state, traces and any benchmark/answer files are off limits"
+tools = ["bash", "read", "write"]
+
+[[guard.deny_add]]
+pattern = '''^(/|~)$|^(/root|/home|/Users|/usr|/opt|/etc|/var|/mnt|/srv|/media|/proc|/sys|/snap|/nix|/boot|/run|/private|/bin|/sbin|/lib|~)(/|$)|(^|/)\.\.(/|$)'''
+reason = "reading or writing outside /work, /data, /tmp and the harness is not allowed"
+tools = ["read", "write"]

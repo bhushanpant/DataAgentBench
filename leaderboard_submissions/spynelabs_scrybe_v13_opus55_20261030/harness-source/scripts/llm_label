@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""llm_label --input FILE --text "{title} -- {description}" --instruction "..." (--labels A,B,C | --extract "field description")
+            [--id COL] [--output FILE] [--batch 25] [--workers 8] [--model M] [--limit N] [--force] [--votes N]
+
+Label or extract a value for EVERY row of a table with a language model (for unstructured text: categories,
+sentiment, entity/number extraction). INPUT: .parquet/.csv/.json/.jsonl (e.g. a dbq result in results/).
+--text is a Python format string over the row's columns. (Core copy of harness/dab-untuned-sage/scripts/llm_label;
+the working directory is $SCRYBE_WORKDIR, else the current directory.) Writes INPUT-with-a-new-column `label` to --output
+(default: <input>.labeled.parquet) and prints the label distribution.
+With --labels the answer is forced to one of the labels (or UNKNOWN). Calls an OpenAI-compatible chat endpoint
+($OPENROUTER_BASE_URL, default OpenRouter; default model: SCRYBE_LABEL_MODEL, else SCRYBE_MODEL, else
+deepseek/deepseek-v4.1-flash). Results are cached in <working directory>/.llm_cache so reruns are free.
+Refuses > 6000 rows without --force (cost guard): sample or pre-filter first when possible.
+--votes N (labels only; default 1): N independent passes with differently shuffled batches,
+per-row majority (rows without a majority get one more pass, then the most common answer of all passes). Prints the
+agreement rate and how many rows had no majority, so an unstable count is visible.
+
+dab-untuned: this is the dab-base / dab-opus-sage labeller (written before any scored-query result) with runtime
+plumbing only: the endpoint comes from OPENROUTER_BASE_URL (the Claude Code runner routes side calls through a local
+shim), the default model falls back to SCRYBE_MODEL, the Jev backend is removed (side calls must go through that one
+endpoint), and each request's reported cost is appended to the harness side-cost meter. Prompts, batching, label
+handling and output are unchanged.
+
+Audit 2026-10-23 (finding 11), output validation and accounting; prompts and batching unchanged:
+- A reply is accepted only with exact id coverage and valid value types (labels: a string; extract: a string, number,
+  boolean or null). Missing or invalid ids are asked again (3 attempts per batch); a reply with ids that were not
+  asked for is rejected whole. Rows still without a valid answer get label = null and label_status = "invalid" (bad
+  model output) or "error" (request failed, deadline, cost cap): never UNKNOWN, never cached. A label outside --labels
+  stays the valid answer UNKNOWN. Only complete, valid batches are cached. Exit code 2 when any row has no valid answer.
+- Transport retries stop at $SCRYBE_DEADLINE, honour Retry-After, and are not made for 4xx statuses other than
+  408/409/429.
+- --votes N sends N separate requests per row (vote index in the cache key; the first vote shares the single-pass
+  cache); requests and cost per pass are printed and recorded.
+- --workers defaults to $SCRYBE_LABEL_WORKERS (else 8); $SCRYBE_LABEL_MAX_USD caps the labeller's reported cost for
+  the session (side_costs.jsonl): requests beyond it are not sent.
+- <output>.meta.json records model, endpoint host, rows, label_status counts, truncation at 3000 chars (row positions
+  and --id values), coverage, retries, requests, cost per pass and request errors. No key or header is stored.
+"""
+import argparse, hashlib, json, os, re, sys, threading, time, urllib.error, urllib.parse, urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+p = argparse.ArgumentParser()
+p.add_argument("--input", required=True); p.add_argument("--text", required=True)
+p.add_argument("--instruction", required=True); p.add_argument("--labels"); p.add_argument("--extract")
+p.add_argument("--id"); p.add_argument("--output"); p.add_argument("--batch", type=int, default=25)
+p.add_argument("--workers", type=int, default=int(os.environ.get("SCRYBE_LABEL_WORKERS") or 8)); p.add_argument("--model"); p.add_argument("--limit", type=int)
+p.add_argument("--force", action="store_true"); p.add_argument("--votes", type=int)
+a = p.parse_args()
+if not (a.labels or a.extract): sys.exit("give --labels or --extract")
+import pandas as pd
+f = a.input
+df = (pd.read_parquet(f) if f.endswith(".parquet") else pd.read_pickle(f) if f.endswith(".pkl") else
+      pd.read_csv(f) if f.endswith(".csv") else pd.read_json(f, lines=f.endswith(".jsonl")))
+if a.limit: df = df.head(a.limit)
+if len(df) > 6000 and not a.force: sys.exit(f"{len(df)} rows: too many without --force (pre-filter or sample)")
+labels = [x.strip() for x in a.labels.split(",")] if a.labels else None
+model = a.model or os.environ.get("SCRYBE_LABEL_MODEL") or os.environ.get("SCRYBE_MODEL") or "deepseek/deepseek-v4.1-flash"
+BASE = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+key = os.environ.get("OPENROUTER_API_KEY", "")
+CACHE = os.path.join(os.environ.get("SCRYBE_WORKDIR") or os.getcwd(), ".llm_cache")
+os.makedirs(CACHE, exist_ok=True)
+texts = []
+for _, r in df.iterrows():
+    try: texts.append(a.text.format(**{k: ("" if pd.isna(v) else v) if not isinstance(v, (list, dict)) else v for k, v in r.items()}))
+    except KeyError as e: sys.exit(f"--text references missing column {e}; columns: {list(df.columns)}")
+
+def cache_get(k):
+    fp = os.path.join(CACHE, f"{k}.json")
+    return json.load(open(fp)) if os.path.exists(fp) else None
+def cache_put(k, v): json.dump(v, open(os.path.join(CACHE, f"{k}.json"), "w"))
+MAX_CHARS = 3000
+DEADLINE = float(os.environ.get("SCRYBE_DEADLINE") or 0)  # epoch seconds; 0 = none
+MAX_USD = float(os.environ.get("SCRYBE_LABEL_MAX_USD") or 0)  # 0 = no cap
+LOCK = threading.Lock()
+ST = {"requests": 0, "transport_retries": 0, "malformed_retries": 0, "cost": 0.0, "errors": [], "spent_before": 0.0}
+try:  # what this session's labeller calls already cost (the cap is per session)
+    for l in open(os.path.join(os.environ.get("SCRYBE_STATE_DIR") or "/nonexistent", "side_costs.jsonl")):
+        try:
+            r = json.loads(l)
+            ST["spent_before"] += float(r.get("cost_usd") or 0) if r.get("kind") == "llm_label" else 0
+        except Exception:
+            pass
+except OSError:
+    pass
+
+class CallError(Exception):
+    pass
+
+def note_error(msg):
+    with LOCK:
+        if len(ST["errors"]) < 20 and msg not in ST["errors"]: ST["errors"].append(msg)
+
+def retry_after(h):
+    v = (h or {}).get("Retry-After") if h is not None else None
+    if not v: return None
+    try: return min(120.0, max(0.0, float(v)))
+    except ValueError: pass
+    try:
+        from email.utils import parsedate_to_datetime
+        return min(120.0, max(0.0, parsedate_to_datetime(v).timestamp() - time.time()))
+    except Exception:
+        return None
+
+def post(url, body, headers, timeout=120):
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json", **headers})
+    for i in range(5):
+        left = DEADLINE - time.time() if DEADLINE else None
+        if left is not None and left < 5: raise CallError("deadline reached: request not sent")
+        with LOCK:
+            if MAX_USD and ST["spent_before"] + ST["cost"] >= MAX_USD:
+                raise CallError(f"cost cap SCRYBE_LABEL_MAX_USD={MAX_USD:g} reached: request not sent")
+            ST["requests"] += 1
+        try:
+            with urllib.request.urlopen(req, timeout=min(timeout, left - 2) if left is not None else timeout) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            last, wait = f"HTTP {e.code}", retry_after(e.headers)
+            if 400 <= e.code < 500 and e.code not in (408, 409, 429): raise CallError(f"{last} (not retried)")
+        except Exception as e:
+            last, wait = type(e).__name__, None
+        wait = 3 * (i + 1) if wait is None else wait
+        if i == 4: raise CallError(f"{last} after 5 attempts")
+        if DEADLINE and time.time() + wait > DEADLINE - 5: raise CallError(f"{last}; no time for a retry before the deadline")
+        with LOCK: ST["transport_retries"] += 1
+        time.sleep(wait)
+
+def log_cost(r):
+    c = 0.0
+    try:
+        c = float(((r or {}).get("usage") or {}).get("cost") or 0)
+        with LOCK: ST["cost"] += c
+        sd = os.environ.get("SCRYBE_STATE_DIR")
+        if c and sd:
+            with open(os.path.join(sd, "side_costs.jsonl"), "a") as fh:
+                fh.write(json.dumps({"kind": "llm_label", "model": model, "cost_usd": c, "ts": time.time()}) + "\n")
+    except Exception:
+        pass
+    return c
+
+def valid(v):
+    if labels: return isinstance(v, str)
+    return v is None or isinstance(v, (str, int, float, bool))
+
+def llm_batch(items, vote=0):
+    """-> ({id: answer}, {id: "ok" | "invalid" | "error"}, requests, cost, cached). Only a complete, valid batch is cached."""
+    k = hashlib.sha1((model + a.instruction + str(labels) + str(a.extract) + json.dumps(items) + (f"#vote{vote}" if vote else "")).encode()).hexdigest()
+    if (c := cache_get(k)) is not None: return c, {i: "ok" for i in c}, 0, 0.0, True
+    spec = (f"Answer with exactly one of: {', '.join(labels)} (or UNKNOWN if none fits)." if labels
+            else f"Extract: {a.extract}. Use null if absent. Keep values short and normalized.")
+    sys_p = ("You label data rows for an analysis. " + a.instruction + "\n" + spec +
+             "\nReturn ONLY a JSON object mapping each item id to its answer, e.g. {\"0\": \"...\", \"1\": \"...\"}.")
+    res, pending, nreq, cost, failed = {}, list(items), 0, 0.0, "invalid"
+    for attempt in range(3):
+        user = "\n\n".join(f"[{i}] {t[:MAX_CHARS]}" for i, t in pending)
+        body = {"model": model, "messages": [{"role": "system", "content": sys_p}, {"role": "user", "content": user}],
+                "temperature": 0, "max_tokens": 60 * len(pending) + 200}
+        try:
+            r = post(BASE + "/chat/completions", body, {"Authorization": f"Bearer {key}"}, 300)
+        except CallError as e:
+            note_error(str(e)); failed = "error"; break
+        nreq += 1; cost += log_cost(r)
+        try: txt = r["choices"][0]["message"].get("content") or ""
+        except Exception: txt = ""
+        m = re.search(r"\{.*\}", txt, re.S)
+        try: out = json.loads(m.group(0)) if m else None
+        except ValueError: out = None
+        want = {str(i) for i, _ in pending}
+        if isinstance(out, dict) and not set(map(str, out)) - want:  # ids that were not asked for: reject the reply whole
+            for i, _ in pending:
+                v = out.get(str(i), out.get(i))
+                if str(i) in out and valid(v):
+                    res[str(i)] = v if not labels else {l.lower(): l for l in labels}.get(v.strip().lower(), "UNKNOWN")
+        pending = [(i, t) for i, t in pending if str(i) not in res]
+        if not pending: break
+        with LOCK: ST["malformed_retries"] += attempt < 2
+    if pending and failed == "invalid":
+        note_error(f"{len(pending)} row(s) without a valid answer after 3 attempts (no JSON object, missing ids, ids not asked for or wrong value types)")
+    status = {str(i): ("ok" if str(i) in res else failed) for i, _ in items}
+    if not pending: cache_put(k, res)
+    return res, status, nreq, cost, False
+
+def one_pass(seed, ids):
+    # seed 0 keeps the original order (same batches and cache as a single pass); other seeds shuffle batch composition
+    import random
+    idx = [(i, texts[i]) for i in ids]
+    if seed:
+        random.Random(seed).shuffle(idx)
+    batches = [idx[i:i + a.batch] for i in range(0, len(idx), a.batch)]
+    res, status, acct = {}, {}, {"pass": seed, "batches": len(batches), "requests": 0, "cached_batches": 0, "cost_usd": 0.0}
+    with ThreadPoolExecutor(max(1, a.workers)) as ex:
+        for r, s, n, c, hit in ex.map(lambda b: llm_batch(b, seed), batches):
+            res.update(r); status.update(s)
+            acct["requests"] += n; acct["cost_usd"] += c; acct["cached_batches"] += hit
+    acct["cost_usd"] = round(acct["cost_usd"], 6)
+    acct_passes.append(acct)
+    return res, status
+
+t0 = time.time()
+acct_passes = []
+votes = a.votes if a.votes else 1
+if not labels:
+    votes = 1
+passes = [one_pass(v, range(len(texts))) for v in range(votes)]
+from collections import Counter
+def ok_votes(i, ps):
+    return [p[0][str(i)] for p in ps if p[1].get(str(i)) == "ok"]
+out, status, agree, nomaj = [], [], 0, []
+for i in range(len(texts)):
+    vs = ok_votes(i, passes)
+    if not vs:  # no valid answer in any pass: say why, never invent a label
+        sts = {p[1].get(str(i)) for p in passes}
+        out.append(None); status.append("error" if "error" in sts else "invalid")
+        continue
+    top, n = Counter(vs).most_common(1)[0]
+    if votes > 1 and n * 2 <= votes:
+        nomaj.append(i)
+    agree += n == votes
+    out.append(top); status.append("ok")
+if nomaj:
+    extra = one_pass(votes, nomaj)
+    for i in nomaj:
+        out[i] = Counter(ok_votes(i, passes + [extra])).most_common(1)[0][0]
+backend = model
+df = df.copy(); df["label"] = [None if v is None else str(v) for v in out]; df["label_status"] = status  # null = no answer / absent
+dst = a.output or re.sub(r"\.(parquet|csv|jsonl?|pkl)$", "", f) + ".labeled.parquet"
+df.astype({c: str for c in df.columns if df[c].dtype == object and c not in ("label", "label_status")}).to_parquet(dst)
+idv = (lambda i: str(df[a.id].iloc[i])) if a.id and a.id in df.columns else (lambda i: str(i))
+cut = [i for i, t in enumerate(texts) if len(t) > MAX_CHARS]
+bad = [i for i, s_ in enumerate(status) if s_ != "ok"]
+counts = {k_: status.count(k_) for k_ in ("ok", "invalid", "error")}
+host = urllib.parse.urlsplit(BASE)
+meta = {"tool": "llm_label", "model": model, "endpoint": f"{host.scheme}://{host.hostname or ''}{':' + str(host.port) if host.port else ''}",
+        "mode": "labels" if labels else "extract", "labels": labels, "extract": a.extract,
+        "instruction_sha1": hashlib.sha1(a.instruction.encode()).hexdigest(), "input": f, "output": dst, "rows": len(df),
+        "status_counts": counts, "batch": a.batch, "workers": max(1, a.workers), "max_usd": MAX_USD or None,
+        "truncation": {"limit_chars": MAX_CHARS, "rows": cut[:1000], "ids": [idv(i) for i in cut[:1000]], "n": len(cut)},
+        "coverage": {"answered_rows": counts["ok"], "unanswered_rows": bad[:1000], "unanswered_ids": [idv(i) for i in bad[:1000]],
+                     "rows_with_all_votes": sum(1 for i in range(len(texts)) if len(ok_votes(i, passes)) == votes)},
+        "votes": votes, "no_majority_rows": len(nomaj), "passes": acct_passes, "requests": ST["requests"],
+        "retries": {"transport": ST["transport_retries"], "malformed": ST["malformed_retries"]},
+        "cost_usd": round(ST["cost"], 6), "errors": ST["errors"], "deadline": DEADLINE or None, "secs": round(time.time() - t0, 1)}
+json.dump(meta, open(dst + ".meta.json", "w"), indent=1, default=str)
+print(f"labeled {len(df)} rows with {backend} in {time.time()-t0:.0f}s -> {dst} (details: {dst}.meta.json)")
+if votes > 1:
+    print(f"votes={votes}: all passes agree on {agree}/{len(df)} rows ({100 * agree / max(len(df), 1):.1f}%); "
+          f"{len(nomaj)} rows had no majority and got one more pass")
+    print(f"votes={votes}: each vote is a separate request; {ST['requests']} requests in {len(acct_passes)} passes, "
+          f"cost ${ST['cost']:.4f} (per pass: {', '.join(f'${p_['cost_usd']:.4f}' for p_ in acct_passes)})")
+if cut:
+    print(f"{len(cut)} row(s) longer than {MAX_CHARS} chars were cut to {MAX_CHARS} before labelling (ids in the .meta.json)")
+print(df["label"].astype(str).value_counts().head(25).to_string())
+if bad:
+    print(f"llm_label: {len(bad)} of {len(df)} rows have no valid answer (invalid model output: {counts['invalid']}, "
+          f"request errors: {counts['error']}); their label is null, label_status says why, and they were not cached. "
+          f"Errors: {'; '.join(ST['errors'][:3])}", file=sys.stderr)
+    sys.exit(2)

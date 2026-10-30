@@ -1,0 +1,132 @@
+# Scrybe UNTUNED core harness for dbt / analytics-engineering tasks (harness/core-untuned).
+# Generic procedure (harness/base lineage) + neutral Sage layer + mechanical finish check.
+# Later candidates are outcome-informed; the directory name is historical, not an untuned-provenance claim.
+# Element-by-element provenance: docs/harness-core-untuned/PROVENANCE.md. Per-benchmark budgets live in bench.toml of
+# the per-benchmark copies (harness/core-untuned-ade, harness/core-untuned-deb; made by scripts/core-untuned-sync.sh);
+# readers merge harness.toml <- bench.toml. See the provenance log for the origin of each change.
+
+[runtime]
+# Claude Code runtime adapter (adapters/<name>), read by the ADE and Harbor installers.
+cc_adapter = "core-claude"
+# Experimental alternative: "on_demand" lists every skill by path without inlining bodies.
+skill_loading = "inline"
+
+[hooks]
+on_start = ["scrybe-start"]
+pre_finish = ["finish-check"]
+# Experimental task-derived SQL contract runner; disabled until cohort validation.
+contract_checks = false
+# Independent task-only specification + code review + executed synthetic dbt units.
+# Candidate opt-in; no benchmark or prior-task evidence is supplied to the reviewer.
+independent_task_checks = false
+# At most 2 rejections per run (user rule for the generic gate); after that every finish is accepted.
+max_finish_rejections = 2
+hook_timeout_s = 300
+# Seconds reserved before the hard kill: agent deadline = start + max_seconds - kill_reserve_s.
+kill_reserve_s = 150
+on_start_max_s = 180
+# The start-up context is never cut silently: above this size the runtime cuts it and says so.
+on_start_chars = 60000
+
+[sage]
+# The Sage layer is part of every configuration of this harness (tests/test_configs.py fails if it is off).
+enabled = true
+# Start-up overview size limit (chars); the renderer reduces detail in fixed steps and states every reduction.
+overview_chars = 20000
+# Share of the overview for the dbt part when an offline warehouse profile is also shown.
+dbt_share = 0.4
+# Build budget at start (seconds) and profiling limits (budgets, not tuning).
+build_budget_s = 60
+profile_max_relations = 150
+profile_max_columns = 60
+top_values_max_distinct = 12
+join_max = 60
+# Every Sage warehouse query is bounded by this limit and by the build deadline (DuckDB interrupt, Snowflake timeout).
+query_timeout_s = 20
+# dbt manifest: target/manifest.json when it matches the project files, else `dbt parse` into the state directory
+# (the project directory is not written), else a regex scan of the project files.
+manifest_parse = true
+manifest_reuse_locked_packages = true # offline recovery from an existing exact-pin cache in a private project copy
+manifest_parse_timeout_s = 60
+# Assets named in the task text (and their direct dependencies) come first in the overview, at full detail within
+# focus_chars (at most half of overview_chars); their relations not covered by the start-up profile are profiled
+# within the focus_profile_* limits.
+focus_chars = 8000
+focus_max_assets = 12
+focus_profile_max_relations = 8
+focus_profile_budget_s = 20
+# Offline profile live check: row counts compared for at most this many tables.
+live_check_max_counts = 200
+# Offline warehouse profile (path relative to the harness dir); empty = none.
+warehouse_layer = ""
+
+[finish_check]
+enabled = true
+# Read-only validation of the affected dbt nodes (fresh run evidence, else `dbt show --limit 1`); never builds.
+validate_changed = true
+parse_timeout_s = 180
+# Time limit of each read-only validation command (the key name predates the read-only check; overlays set it).
+build_timeout_s = 240
+# Affected nodes validated per project; the rest are recorded as unchecked.
+max_validate_nodes = 60
+# Unchanged direct children of rebuilt nodes: "log" = validate read-only, log-only; "off".
+children = "log"
+max_children = 20
+# Models / snapshots whose own file changed or was created but that are not built from the current files: "notice" =
+# reported once per model (the agent can end again), "log" = recorded only, "off".
+unbuilt = "notice"
+# Changed / created models whose schema (or alias) exists in the warehouse only in another letter case, or an
+# "approximate match" error of an affected node in the agent's latest dbt run, on adapters that match names
+# case-insensitively but keep their case (DuckDB): later dbt runs of them fail. "notice" = reported once per project,
+# "log" = recorded only, "off".
+case_conflict = "notice"
+# Explicit output contract (hard rejection whenever missing); adapters can also pass $SCRYBE_OUTPUT_CONTRACT.
+required_paths = []
+# File paths inferred from the task text: "notice" = one notice per path per run; "log" = never shown. Paths only
+# inside projects whose profile type differs from $DB_TYPE are always log-only.
+inferred_paths = "notice"
+
+# ---------------------------------------------------------------- integrity guard (pre-tool; restrictive only)
+# bash rules see the whole command; read/write rules see the file path (Glob/Grep: their search path).
+[[guard.deny]]
+pattern = '(^|[\s;&|(`])(curl|wget)\s'
+reason = "network fetches are not allowed (only `dbt deps` may download packages)"
+tools = ["bash"]
+
+[[guard.deny]]
+pattern = '(^|[\s;&|])pip3?\s+(install|download)\b|(^|[\s;&|])(uv\s+pip|conda|apt|apt-get|npm)\s+install\b|(^|[\s;&|])git\s+clone\b|python3?\s+-m\s+http'
+reason = "installing or downloading software is not allowed"
+tools = ["bash"]
+
+[[guard.deny]]
+pattern = '''(^|[\s'"=(:])/(solutions?|tests?|verifier|grader|logs/verifier)(/|\s|$|['"*])'''
+reason = "the benchmark's test/solution files are off limits; solve from the task and the project"
+tools = ["bash"]
+
+[[guard.deny]]
+pattern = '^/(solutions?|tests?|verifier|grader|logs/verifier)(/|$)'
+reason = "the benchmark's test/solution files are off limits"
+tools = ["read", "write"]
+
+[[guard.deny]]
+pattern = '\b(grep|rg|ag|find|locate|fd|tree)\b[^|;&]*\s/(\s|\*|$)'
+reason = "searching the whole filesystem is not allowed; search inside the project directory"
+tools = ["bash"]
+
+# Patterns use the common subset of Python `re` and Rust `regex` (no look-around: Rust rejects it, and a guard that
+# does not compile is a configuration error). The two rules below spell "not followed by /harness/skills/..." as
+# explicit alternatives; they match exactly what the earlier look-ahead forms matched.
+[[guard.deny]]
+pattern = '\b(cat|head|tail|less|more|grep|egrep|rg|sed|awk|ls|find|python3?|jq|strings|wc|diff|cp|tar|bat|vi|vim|nano|od|xxd)\b[^|;&]*(/installed-agent(?:$|[^/]|/(?:$|[^h]|h(?:$|[^a]|a(?:$|[^r]|r(?:$|[^n]|n(?:$|[^e]|e(?:$|[^s]|s(?:$|[^s]|s(?:$|[^/]|/(?:$|[^s]|s(?:$|[^k]|k(?:$|[^i]|i(?:$|[^l]|l(?:$|[^l]|l(?:$|[^s]|s(?:$|[^/]))))))))))))))))|/tmp/scrybe)'
+reason = "the agent harness's own files and state are off limits (the skills under /installed-agent/harness/skills/ may be read)"
+tools = ["bash"]
+
+[[guard.deny]]
+pattern = '^(/installed-agent(?:$|/(?:(?:$|[^h]|h(?:$|[^a]|a(?:$|[^r]|r(?:$|[^n]|n(?:$|[^e]|e(?:$|[^s]|s(?:$|[^s]|s(?:$|[^/]|/(?:$|[^s]|s(?:$|[^k]|k(?:$|[^i]|i(?:$|[^l]|l(?:$|[^l]|l(?:$|[^s]|s(?:$|[^/])))))))))))))))|harness/skills/(?:[\w.-]*[^\w.-]|[\w.-]{0,3}$|[\w.-]*(?:[^\Wd]|[.-])$|[\w.-]*(?:[^\Wm]|[.-])d$|[\w.-]*[\w-]md$)))|/tmp/scrybe(?:/|$))'
+reason = "the agent harness's own files and state are off limits (the skills under /installed-agent/harness/skills/ may be read)"
+tools = ["read"]
+
+[[guard.deny]]
+pattern = '^(/installed-agent|/tmp/scrybe)(/|$)'
+reason = "the agent harness's own files and state are off limits"
+tools = ["write"]

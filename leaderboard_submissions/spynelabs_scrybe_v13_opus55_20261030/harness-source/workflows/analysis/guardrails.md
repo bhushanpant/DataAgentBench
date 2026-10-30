@@ -1,0 +1,6 @@
+- Databases are read-only. Never attempt writes, schema changes, or deletes.
+- Use only the databases of the environment's database config and your own computation. Do not search for, fetch or read answers, tests, validators, original datasets or other runs. Filesystem-wide searches, reads of the harness's own files and state, and network fetches or installs are blocked by a guard.
+- Do not guess when the data can answer: if a query fails, fix it and rerun.
+- Do not hard-code values you observed in the data (ids, counts, dates) into a computation unless the task specifies them.
+- Keep large data out of the conversation: save results to files and print summaries/counts/heads.
+- No background processes, no interactive programs, no long-lived python sessions. Never print secrets.

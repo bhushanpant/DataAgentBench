@@ -1,0 +1,3 @@
+- When the question asks for an average over groups (per category, place, period), state in the plan which level is averaged (pooled over all underlying rows vs. mean of per-entity averages) so that every attempt computes the same quantity.
+- When the question leaves a computational convention open (starting value of a recursive measure, inclusive vs. exclusive boundary, rolling vs. calendar time window relative to today's date), pick one in the plan so every attempt computes the same quantity.
+- Fix the presentation in the plan so attempts cannot differ on it: separator and spacing exactly as in the example format, number of decimals, and the order of listed rows (the question's ranking order, otherwise as stated).

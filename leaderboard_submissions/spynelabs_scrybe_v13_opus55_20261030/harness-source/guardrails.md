@@ -1,0 +1,7 @@
+- Do not look for, download, or read benchmark answers, tests, solutions or reference outputs (the benchmark's own grading files outside the dbt project; no web access for that, no searching for hidden test files). Solve from the task and the project. Filesystem-wide searches, reads of the harness's own files and network fetches other than `dbt deps` are blocked by a guard.
+- Never delete or rewrite unrelated models, tests, seeds, macros or configs. Do not change existing behaviour that the task did not ask to change.
+- Never leave a background process running or a database connection open: DuckDB allows only one writer, and a process holding the lock blocks every later dbt run. No `&`, no `nohup`, no interactive shells, no long-lived python sessions.
+- Do not hard-code values you observed in the data (ids, counts, dates) into model logic unless the task specifies them.
+- Keep `profiles.yml` working: the profile name must match `profile:` in `dbt_project.yml`. Never print secrets.
+- If the task says to create a file at a path, create exactly that path. Work in the project directory the task names; if it names a directory that does not exist yet, create the dbt project there.
+- Do not edit files under `dbt_packages/` (`dbt deps` overwrites them). To change a package model, override it in the project (disable it in `dbt_project.yml` and add a model of the same name) or use the package's vars.

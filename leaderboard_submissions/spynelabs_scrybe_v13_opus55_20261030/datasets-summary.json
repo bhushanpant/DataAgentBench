@@ -1,0 +1,86 @@
+[
+  {
+    "dataset": "DEPS_DEV_V1",
+    "queries": 2,
+    "trials": 10,
+    "passed": 10,
+    "pass_at_1": 1.0
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "queries": 4,
+    "trials": 20,
+    "passed": 15,
+    "pass_at_1": 0.75
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "queries": 3,
+    "trials": 15,
+    "passed": 10,
+    "pass_at_1": 0.6666666666666666
+  },
+  {
+    "dataset": "PATENTS",
+    "queries": 3,
+    "trials": 15,
+    "passed": 14,
+    "pass_at_1": 0.9333333333333332
+  },
+  {
+    "dataset": "agnews",
+    "queries": 4,
+    "trials": 20,
+    "passed": 8,
+    "pass_at_1": 0.4
+  },
+  {
+    "dataset": "bookreview",
+    "queries": 3,
+    "trials": 15,
+    "passed": 15,
+    "pass_at_1": 1.0
+  },
+  {
+    "dataset": "crmarenapro",
+    "queries": 13,
+    "trials": 65,
+    "passed": 59,
+    "pass_at_1": 0.9076923076923078
+  },
+  {
+    "dataset": "googlelocal",
+    "queries": 4,
+    "trials": 20,
+    "passed": 20,
+    "pass_at_1": 1.0
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "queries": 3,
+    "trials": 15,
+    "passed": 15,
+    "pass_at_1": 1.0
+  },
+  {
+    "dataset": "stockindex",
+    "queries": 3,
+    "trials": 15,
+    "passed": 15,
+    "pass_at_1": 1.0
+  },
+  {
+    "dataset": "stockmarket",
+    "queries": 5,
+    "trials": 25,
+    "passed": 25,
+    "pass_at_1": 1.0
+  },
+  {
+    "dataset": "yelp",
+    "queries": 7,
+    "trials": 35,
+    "passed": 34,
+    "pass_at_1": 0.9714285714285714
+  }
+]

@@ -1,0 +1,1 @@
+- When candidates agree on content and differ only in presentation (spacing, separators, row order, name spelling), choose the one that follows the example format's separators and the data's exact spelling.

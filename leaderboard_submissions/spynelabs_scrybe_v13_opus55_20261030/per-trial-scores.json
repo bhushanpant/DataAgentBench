@@ -1,0 +1,1622 @@
+[
+  {
+    "dataset": "agnews",
+    "query": "1",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "agnews",
+    "query": "1",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "agnews",
+    "query": "1",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "agnews",
+    "query": "1",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "agnews",
+    "query": "1",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "agnews",
+    "query": "2",
+    "run": 0,
+    "reward": 0
+  },
+  {
+    "dataset": "agnews",
+    "query": "2",
+    "run": 1,
+    "reward": 0
+  },
+  {
+    "dataset": "agnews",
+    "query": "2",
+    "run": 2,
+    "reward": 0
+  },
+  {
+    "dataset": "agnews",
+    "query": "2",
+    "run": 3,
+    "reward": 0
+  },
+  {
+    "dataset": "agnews",
+    "query": "2",
+    "run": 4,
+    "reward": 0
+  },
+  {
+    "dataset": "agnews",
+    "query": "3",
+    "run": 0,
+    "reward": 0
+  },
+  {
+    "dataset": "agnews",
+    "query": "3",
+    "run": 1,
+    "reward": 0
+  },
+  {
+    "dataset": "agnews",
+    "query": "3",
+    "run": 2,
+    "reward": 0
+  },
+  {
+    "dataset": "agnews",
+    "query": "3",
+    "run": 3,
+    "reward": 0
+  },
+  {
+    "dataset": "agnews",
+    "query": "3",
+    "run": 4,
+    "reward": 0
+  },
+  {
+    "dataset": "agnews",
+    "query": "4",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "agnews",
+    "query": "4",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "agnews",
+    "query": "4",
+    "run": 2,
+    "reward": 0
+  },
+  {
+    "dataset": "agnews",
+    "query": "4",
+    "run": 3,
+    "reward": 0
+  },
+  {
+    "dataset": "agnews",
+    "query": "4",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "1",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "1",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "1",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "1",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "1",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "2",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "2",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "2",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "2",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "2",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "3",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "3",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "3",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "3",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "bookreview",
+    "query": "3",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "1",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "1",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "1",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "1",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "1",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "2",
+    "run": 0,
+    "reward": 0
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "2",
+    "run": 1,
+    "reward": 0
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "2",
+    "run": 2,
+    "reward": 0
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "2",
+    "run": 3,
+    "reward": 0
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "2",
+    "run": 4,
+    "reward": 0
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "3",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "3",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "3",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "3",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "3",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "4",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "4",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "4",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "4",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "4",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "5",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "5",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "5",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "5",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "5",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "6",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "6",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "6",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "6",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "6",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "7",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "7",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "7",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "7",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "7",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "8",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "8",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "8",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "8",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "8",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "9",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "9",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "9",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "9",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "9",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "10",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "10",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "10",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "10",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "10",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "11",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "11",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "11",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "11",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "11",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "12",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "12",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "12",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "12",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "12",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "13",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "13",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "13",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "13",
+    "run": 3,
+    "reward": 0
+  },
+  {
+    "dataset": "crmarenapro",
+    "query": "13",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "DEPS_DEV_V1",
+    "query": "1",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "DEPS_DEV_V1",
+    "query": "1",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "DEPS_DEV_V1",
+    "query": "1",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "DEPS_DEV_V1",
+    "query": "1",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "DEPS_DEV_V1",
+    "query": "1",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "DEPS_DEV_V1",
+    "query": "2",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "DEPS_DEV_V1",
+    "query": "2",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "DEPS_DEV_V1",
+    "query": "2",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "DEPS_DEV_V1",
+    "query": "2",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "DEPS_DEV_V1",
+    "query": "2",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "1",
+    "run": 0,
+    "reward": 0
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "1",
+    "run": 1,
+    "reward": 0
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "1",
+    "run": 2,
+    "reward": 0
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "1",
+    "run": 3,
+    "reward": 0
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "1",
+    "run": 4,
+    "reward": 0
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "2",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "2",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "2",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "2",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "2",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "3",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "3",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "3",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "3",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "3",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "4",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "4",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "4",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "4",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "GITHUB_REPOS",
+    "query": "4",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "1",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "1",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "1",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "1",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "1",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "2",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "2",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "2",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "2",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "2",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "3",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "3",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "3",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "3",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "3",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "4",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "4",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "4",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "4",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "googlelocal",
+    "query": "4",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "1",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "1",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "1",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "1",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "1",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "2",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "2",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "2",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "2",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "2",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "3",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "3",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "3",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "3",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "music_brainz_20k",
+    "query": "3",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "1",
+    "run": 0,
+    "reward": 0
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "1",
+    "run": 1,
+    "reward": 0
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "1",
+    "run": 2,
+    "reward": 0
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "1",
+    "run": 3,
+    "reward": 0
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "1",
+    "run": 4,
+    "reward": 0
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "2",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "2",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "2",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "2",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "2",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "3",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "3",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "3",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "3",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "PANCANCER_ATLAS",
+    "query": "3",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "1",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "1",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "1",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "1",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "1",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "2",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "2",
+    "run": 1,
+    "reward": 0
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "2",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "2",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "2",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "3",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "3",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "3",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "3",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "PATENTS",
+    "query": "3",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "1",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "1",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "1",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "1",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "1",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "2",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "2",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "2",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "2",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "2",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "3",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "3",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "3",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "3",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "stockindex",
+    "query": "3",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "1",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "1",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "1",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "1",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "1",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "2",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "2",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "2",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "2",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "2",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "3",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "3",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "3",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "3",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "3",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "4",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "4",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "4",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "4",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "4",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "5",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "5",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "5",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "5",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "stockmarket",
+    "query": "5",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "1",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "1",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "1",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "1",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "1",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "2",
+    "run": 0,
+    "reward": 0
+  },
+  {
+    "dataset": "yelp",
+    "query": "2",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "2",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "2",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "2",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "3",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "3",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "3",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "3",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "3",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "4",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "4",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "4",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "4",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "4",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "5",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "5",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "5",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "5",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "5",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "6",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "6",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "6",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "6",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "6",
+    "run": 4,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "7",
+    "run": 0,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "7",
+    "run": 1,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "7",
+    "run": 2,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "7",
+    "run": 3,
+    "reward": 1
+  },
+  {
+    "dataset": "yelp",
+    "query": "7",
+    "run": 4,
+    "reward": 1
+  }
+]

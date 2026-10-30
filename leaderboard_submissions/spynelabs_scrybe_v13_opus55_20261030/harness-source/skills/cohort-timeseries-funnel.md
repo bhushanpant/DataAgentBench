@@ -1,0 +1,12 @@
+---
+name: cohort-timeseries-funnel
+description: Cohorts and retention, period-over-period and rolling metrics, funnels, state transitions, as-of dates
+triggers: [cohort, cohorts, retention, churn, funnel, rfm, recency, lifetime value, ltv, cltv, rolling, month-over-month, week-over-week, year-over-year, tier migration, transition, conversion rate, drop-off]
+---
+- Cohort anchor: use the anchor the task defines (signup date, first order, first event); otherwise the entity's first qualifying activity. Decide explicitly what to do with activity dated before the anchor and say how many rows it affects; month offset = `date_diff('month', cohort_month, activity_month)` on month-truncated dates.
+- Retention: point retention (active in month k) vs cumulative (active in any month ≤ k) are different; cohort size is the count at month 0 and every rate's denominator. Check that period-0 retention is 100% when the anchor is the first activity, and that counts never exceed the cohort size.
+- As-of date: when the task gives a reference or as-of date, exclude activity after it everywhere (recency, tenure, windows); negative recency or tenure means rows after the as-of date leaked in. "Last N full months" excludes the as-of month itself.
+- Period-over-period: build a calendar spine of periods per entity (`generate_series` / date spine cross join entities) and left-join the metric so missing periods are zero (or NULL if the task says so); then `lag()` compares with the previous calendar period. Rolling N-day metrics use `range` frames or the spine, not `rows`.
+- Funnels: stages nest (each stage's set is a subset of the previous one when the task defines a sequence); every stage-to-stage rate is ≤ 1, and drop-off = previous stage count - this stage count unless the task defines it differently. A rate above 1 means an event mapping or join is wrong.
+- State transitions (tiers, segments): define the initial state per entity, order changes by the column the task names for ordering (else the timestamp), then the unique key, and build from→to pairs with `lag()`; for each from-state the outgoing transition shares add up to 1. Upgrades/downgrades "within N days" are measured from the transition date, not the end state at day N, unless the task says otherwise.
+- RFM / scoring: compute recency from the as-of date, frequency and monetary on the task's population and status filter; use the exact ranking function the task names (`ntile`, `percent_rank`, `rank`) with exactly the ordering it gives.

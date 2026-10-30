@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Read-only drilldown into this task's independent review and synthetic fixtures.
+exec python3 /installed-agent/cc/task_audit.py show "$@"

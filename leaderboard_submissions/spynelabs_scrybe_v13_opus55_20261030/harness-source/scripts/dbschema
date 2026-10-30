@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""dbschema [<logical_db>] [table_or_collection]
+List tables/collections with row counts and columns (SQL) or sampled field names (Mongo).
+With a table name: columns + types + 3 sample rows.
+Same connection code as `from multidb import q` (read-only Postgres session, UTF-8-safe SQLite, Mongo client
+closed); an unknown database name is reported with the valid names; one failing table does not stop the listing. From harness/dab-untuned-sage/scripts/dbschema (v6.3)."""
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import multidb as mdb  # noqa: E402
+
+
+def main(argv):
+    try:
+        names = [argv[0]] if argv else list(mdb._CFG)
+        for n in names:
+            mdb._conf(n)
+    except (ValueError, RuntimeError) as e:
+        print(f"dbschema: {e}")
+        return 2
+    one = argv[1] if len(argv) > 1 else None
+    import pandas as pd
+    pd.set_option("display.width", 220)
+    pd.set_option("display.max_colwidth", 60)
+    for n in names:
+        c = mdb._conf(n)
+        t = c["type"]
+        print(f"== {n}  ({t})")
+        try:
+            if t in ("mongo", "mongodb"):
+                from pymongo import MongoClient
+                with MongoClient(c["uri"], serverSelectionTimeoutMS=10000) as cl:
+                    db = cl[c["db"]]
+                    colls = [one] if one else sorted(db.list_collection_names())
+                    for col in colls:
+                        docs = list(db[col].find().limit(200))
+                        keys = sorted({k for d in docs for k in d})
+                        print(f"  {col}: ~{db[col].estimated_document_count()} docs; fields: {', '.join(keys)}")
+                        if one:
+                            for d in docs[:3]:
+                                d.pop("_id", None)
+                                print("   ", json.dumps(d, default=str, ensure_ascii=False)[:700])
+                continue
+            if t == "postgres":
+                tabs = list(mdb.q(n, "select table_name from information_schema.tables where table_schema='public' order by 1")["table_name"])
+            elif t == "sqlite":
+                tabs = list(mdb.q(n, "select name from sqlite_master where type in ('table','view') order by 1")["name"])
+            else:
+                tabs = list(mdb.q(n, "select table_name from information_schema.tables order by 1")["table_name"])
+            if one:
+                tabs = [one]
+            if len(tabs) > 60 and not one:
+                print(f"  {len(tabs)} tables, e.g.: {', '.join(tabs[:25])} ...")
+                tabs = tabs[:3]
+            for tb in tabs:
+                qt = '"' + str(tb).replace('"', '""') + '"'
+                try:
+                    cnt = mdb.q(n, f"select count(*) as n from {qt}").iloc[0, 0]
+                    sample = mdb.q(n, f"select * from {qt} limit 3")
+                except Exception as e:  # noqa: BLE001
+                    print(f"  {tb}: ERROR {type(e).__name__}: {str(e)[:300]}")
+                    continue
+                cols = ", ".join(f"{k}:{v}" for k, v in sample.dtypes.items())
+                print(f"  {tb}: {cnt} rows; {cols}")
+                if one:
+                    print(sample.to_string(index=False)[:3000])
+        except Exception as e:  # noqa: BLE001
+            print(f"  ERROR: {type(e).__name__}: {str(e)[:500]}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

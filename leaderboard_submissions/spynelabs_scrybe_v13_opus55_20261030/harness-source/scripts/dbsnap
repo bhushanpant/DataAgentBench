@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""dbsnap: compact schema snapshot of every logical database in the environment's database config (multidb.py).
+Per table/collection: row count, columns with types, 2 sample rows (values truncated). Bounded output.
+v6.3: Mongo client closed after use; table names quoted safely; one failing table is reported and the snapshot goes on
+(output format unchanged). From harness/dab-untuned-sage/scripts/dbsnap (v6.3)."""
+import json, os, sys
+
+import pandas as pd
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from multidb import _CFG, q  # noqa: E402
+
+MAXV = 60
+
+
+def short(v):
+    s = "NULL" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v)
+    return s if len(s) <= MAXV else s[:MAXV - 3] + "..."
+
+
+def show_df(name, n, df):
+    cols = ", ".join(f"{c} {str(t)}" for c, t in df.dtypes.items())
+    print(f"- {name} ({n} rows): {cols}")
+    for _, r in df.head(2).iterrows():
+        print("    e.g. " + " | ".join(f"{c}={short(r[c])}" for c in df.columns))
+
+
+print("SCHEMA SNAPSHOT (precomputed; read-only databases)\n")
+for db, c in _CFG.items():
+    t = c["type"]
+    print(f"## {db}  [{t}]")
+    try:
+        if t in ("mongo", "mongodb"):
+            from pymongo import MongoClient
+            with MongoClient(c["uri"], serverSelectionTimeoutMS=10000) as cl:
+                d = cl[c["db"]]
+                for col in sorted(d.list_collection_names()):
+                    docs = list(d[col].find().limit(50))
+                    keys = sorted({k for x in docs for k in x if k != "_id"})
+                    print(f"- collection {col} (~{d[col].estimated_document_count()} docs): fields {', '.join(keys)}")
+                    for x in docs[:2]:
+                        x.pop("_id", None)
+                        print("    e.g. " + json.dumps({k: short(v) for k, v in x.items()}, default=str))
+        else:
+            if t == "postgres":
+                tabs = list(q(db, "select table_name from information_schema.tables where table_schema='public' order by 1")["table_name"])
+            elif t == "sqlite":
+                tabs = list(q(db, "select name from sqlite_master where type in ('table','view') order by 1")["name"])
+            else:
+                tabs = list(q(db, "select table_name from information_schema.tables order by 1")["table_name"])
+            shown = tabs if len(tabs) <= 30 else tabs[:5]
+            if len(tabs) > 30:
+                print(f"- {len(tabs)} tables with the same layout pattern, e.g. {', '.join(tabs[:12])} ...")
+            for tb in shown:
+                qt = '"' + str(tb).replace('"', '""') + '"'
+                try:
+                    n = q(db, f"select count(*) as n from {qt}").iloc[0, 0]
+                    show_df(tb, n, q(db, f"select * from {qt} limit 2"))
+                except Exception as e:  # noqa: BLE001  one bad table must not hide the others
+                    print(f"- {tb}: (snapshot error: {type(e).__name__}: {str(e)[:200]})")
+    except Exception as e:
+        print(f"  (snapshot error: {type(e).__name__}: {str(e)[:200]})")
+    print()

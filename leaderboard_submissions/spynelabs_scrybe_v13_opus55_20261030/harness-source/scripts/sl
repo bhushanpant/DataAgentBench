@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""sl: drill-down into the Sage layer built at the start of this run (sage_build.py) and, when configured, the
+offline warehouse profile. Read-only; `sl values` and `sl rebuild` query the warehouse live.
+
+  sl overview [--full]           the start-up overview (--full: every part at full detail, no size limit)
+  sl status                      how the layer was built (sources, coverage, limits)
+  sl task                        question-matched source columns and their recorded statistics
+  sl projects                    dbt projects found, with counts
+  sl models [project|package]    every model (name, path, materialization, relation, rows)
+  sl model <name>                one model / seed / snapshot: config, lineage, tests, columns with statistics
+  sl sources                     every declared source table
+  sl source <source.table>       one source table in full
+  sl relations [schema]          relations in the warehouse now (from the start-up list)
+  sl table <schema.table>        one relation: offline profile entry and/or start-up profile
+  sl tables [schema]             tables of the offline warehouse profile (or the start-up relation list)
+  sl joins [<name>]              declared relationships tests (measured) and offline measured join pairs
+  sl lineage <model>             upstream refs/sources and downstream users
+  sl search <term>               names, columns, descriptions, docs and recorded values containing <term>
+  sl values <relation> <column> [n]   live: most frequent values of a column
+  sl rebuild                     rebuild the layer now (e.g. after you built new models) and print the status
+Long outputs are paged: add --offset N.
+When the offline layer input ([sage].warehouse_layer) is a database profile view and there is no dbt project, `sl`
+serves that view's commands instead (sage_dbview.py: overview, tables, table, column, joins, search; plus status,
+rebuild); `sl help` lists them."""
+import json
+import os
+import signal
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scrybe_core as core  # noqa: E402
+import sage_build  # noqa: E402
+import sage_render as R  # noqa: E402
+
+LAYER = os.path.join(core.STATE, sage_build.LAYER_FILE)
+OVERVIEW = os.path.join(core.STATE, "sage", "overview.md")
+
+
+def die(msg, code=1):
+    print(msg)
+    sys.exit(code)
+
+
+def load():
+    try:
+        with open(LAYER) as fh:
+            layer = json.load(fh)
+    except FileNotFoundError:
+        status = os.path.join(core.STATE, "sage", "status.json")
+        why = ""
+        try:
+            why = json.load(open(status)).get("line", "")
+        except Exception:  # noqa: BLE001
+            pass
+        die("sl: no Sage layer was built in this run" + (f" ({why})" if why else "") + "; `sl rebuild` tries again")
+    off = None
+    cfg = core.section("sage")
+    if cfg.get("warehouse_layer"):
+        off, _ = sage_build.load_offline(sage_build.offline_path(cfg))
+    return layer, off
+
+
+def dbview_only():
+    """The offline layer input is a database profile view and the layer has no dbt project: `sl` then serves the
+    view's drill-down commands (sage_dbview)."""
+    cfg = core.section("sage")
+    off, _ = sage_build.load_offline(sage_build.offline_path(cfg)) if cfg.get("warehouse_layer") else (None, "")
+    if not sage_build.is_dbview(off):
+        return None
+    try:
+        with open(LAYER) as fh:
+            if json.load(fh).get("projects"):
+                return None
+    except (OSError, ValueError):
+        pass
+    return off
+
+
+def opt(args, name, default=0):
+    if name in args:
+        i = args.index(name)
+        try:
+            v = int(args[i + 1])
+        except (IndexError, ValueError):
+            die(f"{name} needs a number")
+        del args[i: i + 2]
+        return v
+    return default
+
+
+def emit(lines, offset, cmd):
+    print("\n".join(R.page(lines, offset, R.PAGE_LINES, cmd)))
+
+
+def find_nodes(layer, name, kinds=("models", "seeds", "snapshots", "sources")):
+    nl = name.lower()
+    exact = [(r, k, x) for r, k, x in R.all_nodes(layer) if k in kinds and R.node_name(k, x).lower() == nl]
+    if exact:
+        return exact
+    return [(r, k, x) for r, k, x in R.all_nodes(layer) if k in kinds and (x.get("alias") or "").lower() == nl]
+
+
+def off_key(off, name):
+    if not off:
+        return None
+    t = off.get("tables") or {}
+    if name in t:
+        return name
+    hits = [k for k in t if k.lower() == name.lower()] or [k for k in t if k.rpartition(".")[2].lower() == name.lower()]
+    return hits[0] if len(hits) == 1 else (hits if hits else None)
+
+
+def main(argv):
+    args = list(argv)
+    offset = opt(args, "--offset")
+    full = "--full" in args
+    args = [a for a in args if a != "--full"]
+    cmd = args[0] if args else "overview"
+    rest = args[1:]
+    view = dbview_only() if cmd != "rebuild" else None
+    if view is not None:
+        import sage_dbview as V
+        if cmd in ("help", "-h", "--help"):
+            print(V.USAGE + "\n  sl status                         how the layer was built\n"
+                  "  sl rebuild                        rebuild the start-up layer and overview")
+            return 0
+        if cmd == "overview":
+            try:
+                print(open(OVERVIEW).read())
+            except OSError:
+                print(R.overview(load()[0], view)[0])
+            return 0
+        if cmd in V.COMMANDS:
+            return V.command(view, cmd, rest + (["--offset", str(offset)] if offset else []))
+        if cmd != "status":
+            die(f"unknown command {cmd!r} (`sl help`)", 2)
+    if cmd in ("help", "-h", "--help"):
+        print(__doc__)
+        return 0
+    if cmd == "rebuild":
+        cfg = core.section("sage")
+        dl = core.deadline_left()
+        deadline = (time.time() + dl - 30) if dl else None
+        layer, off = sage_build.build(cfg, deadline=deadline)
+        task = core.task_text()
+        question_focus = bool(cfg.get("question_focus", False))
+        if question_focus:
+            import sage_question as Q
+            focus = Q.make_focus(layer, off, task, int(cfg.get("focus_max_assets", R.FOCUS_MAX_ASSETS)),
+                                 int(cfg.get("focus_upstream_depth", 2)))
+        else:
+            focus = R.select_focus(layer, off, task, int(cfg.get("focus_max_assets", R.FOCUS_MAX_ASSETS)))
+        want = R.focus_relations(layer, focus)
+        if want and int(cfg.get("focus_profile_max_relations", 8)) > 0:
+            sage_build.profile_named(cfg, layer, want, deadline, task=task if question_focus else None)
+        if question_focus:
+            focus['evidence'] = Q.evidence(layer, focus)
+            core.save_json('sage/question.json', focus['evidence'])
+        core.save_json(sage_build.LAYER_FILE, layer)
+        text, info = R.overview(layer, off, int(cfg.get("overview_chars", 20000)), float(cfg.get("dbt_share", 0.4)),
+                                focus=focus, focus_chars=int(cfg.get("focus_chars", R.FOCUS_CHARS)))
+        with open(OVERVIEW, "w") as fh:
+            fh.write(text)
+        core.save_json("sage/focus.json", {"focus": info.get("focus"), "profiling": layer.get("focus_profiling")})
+        print(R.status_line(layer, off, info) + " (rebuilt; `sl overview` shows the new overview)")
+        return 0
+    layer, off = load()
+    if cmd == "overview":
+        if full:
+            emit(R.overview_full(layer, off).splitlines(), offset, "sl overview --full")
+        else:
+            try:
+                print(open(OVERVIEW).read())
+            except OSError:
+                print(R.overview(layer, off)[0])
+        return 0
+    if cmd == "status":
+        st = core.load_json("sage/status.json", {}) or {}
+        print(st.get("line", "(no status recorded)"))
+        print(json.dumps({"status": st.get("status"), "degraded_by": st.get("reasons"),
+                          **{k: layer.get(k) for k in ("backend", "built_at", "limits", "profile_coverage", "budget",
+                                                       "focus_profiling", "offline", "build_secs", "errors")},
+                          "warehouse_source": (layer.get("warehouse") or {}).get("source"),
+                          "discovery": {p["root"]: p.get("discovery") for p in layer.get("projects") or []}},
+                         indent=1, default=str))
+        return 0
+    if cmd == "task":
+        import sage_question as Q
+        ev = core.load_json("sage/question.json", None)
+        if ev is None:
+            focus = Q.make_focus(layer, off, core.task_text())
+            ev = Q.evidence(layer, focus)
+        emit(Q.render_evidence(ev).splitlines(), offset, "sl task")
+        return 0
+    if cmd == "projects":
+        for p in layer.get("projects") or []:
+            print(f"{p['root']}: name {p.get('name')}, profile {p.get('profile')}, type {p.get('type')}, "
+                  f"{len(p.get('models', []))} models, {len(p.get('sources', []))} sources, {len(p.get('seeds', []))} seeds, "
+                  f"{len(p.get('snapshots', []))} snapshots, packages installed: {', '.join(p.get('packages_installed') or []) or 'none'}")
+        for pk in layer.get("packages") or []:
+            print(f"package {pk['package']} (in {pk['project']}): {len(pk['models'])} models, {len(pk['sources'])} sources")
+        if not layer.get("projects"):
+            print("no dbt project was found at start")
+        return 0
+    if cmd == "models":
+        flt = rest[0].lower() if rest else None
+        lines = []
+        for root, kind, x in R.all_nodes(layer):
+            if kind not in ("models", "seeds", "snapshots"):
+                continue
+            if flt and flt not in root.lower():
+                continue
+            lines.append(R.model_head(layer, x)[2:] + f"  [{kind[:-1]}, {root}]")
+        emit(lines or ["no models"], offset, "sl models" + (f" {rest[0]}" if rest else ""))
+        return 0
+    if cmd == "sources":
+        lines = [f"{R.node_name(k, x)}  (schema {x['schema']}, identifier {x['identifier']}; {root})  " + R.relation_suffix(layer, x)
+                 for root, k, x in R.all_nodes(layer) if k == "sources"]
+        emit(lines or ["no sources declared"], offset, "sl sources")
+        return 0
+    if cmd in ("model", "source", "lineage"):
+        if not rest:
+            die(f"usage: sl {cmd} <name>")
+        hits = find_nodes(layer, rest[0], ("sources",) if cmd == "source" else ("models", "seeds", "snapshots", "sources"))
+        if not hits:
+            die(f"no dbt node named {rest[0]} (`sl search {rest[0]}`)")
+        lines = []
+        for root, kind, x in hits:
+            if cmd == "lineage":
+                nm = R.node_name(kind, x)
+                lines += [f"{nm} ({root})", "  upstream refs: " + (", ".join(x.get("refs") or []) or "none"),
+                          "  upstream sources: " + (", ".join(x.get("sources") or []) or "none"),
+                          "  downstream: " + (", ".join(R.children_of(layer, nm)) or "none")]
+            else:
+                lines += R.node_detail(layer, root, kind, x) + [""]
+        emit(lines, offset, f"sl {cmd} {rest[0]}")
+        return 0
+    if cmd == "relations":
+        flt = rest[0].lower() if rest else None
+        rels = (layer.get("warehouse") or {}).get("relations") or []
+        lines = []
+        for r in rels:
+            key = R.rkey(layer, r)
+            if flt and key.rpartition(".")[0].lower() != flt and r[0].lower() != flt:
+                continue
+            p = (layer.get("profiles") or {}).get(key)
+            lines.append(f"{key} ({r[2]}" + ("" if p is None else (", profile failed" if p.get("error") else f", {R.n_(p['rows'])} rows"))
+                         + ")")
+        if (layer.get("warehouse") or {}).get("error"):
+            lines.insert(0, f"warehouse not reachable at start: {layer['warehouse']['error']}")
+        emit(lines or ["no relations"], offset, "sl relations" + (f" {rest[0]}" if rest else ""))
+        return 0
+    if cmd in ("table", "relation"):
+        if not rest:
+            die("usage: sl table <schema.table>")
+        name = rest[0]
+        lines = []
+        k = off_key(off, name)
+        if isinstance(k, list):
+            lines.append(f"{name} matches several offline tables: {', '.join(k)}")
+        elif k:
+            lines += ["offline profile:"] + R.off_table_detail(off, k)
+        prof_keys = [key for key in (layer.get("profiles") or {}) if key.lower() == name.lower() or key.lower().endswith("." + name.lower())]
+        for key in sorted(prof_keys):
+            p = layer["profiles"][key]
+            lines.append(f"start-up profile of {key}:")
+            if p.get("error"):
+                lines.append(f"  profile failed: {p['error']}")
+                continue
+            lines.append(f"  rows: {R.n_(p['rows'])}; columns: {R.n_(p.get('columns_total'))} (measured {p.get('method', 'full scan')})")
+            for c in p["columns"]:
+                lines.append(f"  - {c['name']} {c.get('type', '')}  {R.col_stats(c, p.get('distinct_exact'))}" + (f"  {R.top_text(c)}" if c.get("top") else ""))
+        for key, cols in (layer.get('warehouse', {}).get('columns') or {}).items():
+            if key.lower() == name.lower() or key.lower().endswith('.' + name.lower()):
+                measured = {c['name'] for c in (layer.get('profiles', {}).get(key) or {}).get('columns', [])}
+                remaining = [(c, t) for c, t in cols if c not in measured]
+                if remaining:
+                    lines.append(f'catalog columns with unmeasured statistics in {key}:')
+                    lines += [f'  - {c} {t}' for c, t in remaining]
+        short, sch = name.rpartition(".")[2].lower(), name.rpartition(".")[0].lower()
+        mk = [m for m in ((off or {}).get("main") or {}) if m.lower() == short and sch in ("", "main")]
+        for m in mk:
+            v = off["main"][m]
+            lines.append(f"offline index of MAIN.{m}: {R.n_(v[0])} rows; columns {v[1]}" + (f"; same name and row count as {v[2][1:]}" if len(v) > 2 else ""))
+        if not lines:
+            rels = [R.rkey(layer, r) for r in (layer.get("warehouse") or {}).get("relations") or [] if r[1].lower() == name.lower().rpartition(".")[2]]
+            die(f"no profile recorded for {name}" + (f"; it exists in the warehouse as {', '.join(rels)} (`sql \"describe ...\"`)" if rels else
+                                                     f" (`sl search {name}`)"))
+        emit(lines, offset, f"sl table {name}")
+        return 0
+    if cmd == "tables":
+        flt = rest[0].lower() if rest else None
+        if off:
+            lines = [R.off_table_line(k, t)[2:] for k, t in sorted(off["tables"].items()) if not flt or k.lower().startswith(flt + ".")]
+        else:
+            lines = [f"{R.rkey(layer, r)} ({r[2]})" for r in (layer.get("warehouse") or {}).get("relations") or [] if not flt or r[0].lower() == flt]
+        emit(lines or ["no tables"], offset, "sl tables" + (f" {rest[0]}" if rest else ""))
+        return 0
+    if cmd == "joins":
+        flt = rest[0].lower() if rest else None
+        lines = []
+        js = layer.get("joins") or []
+        sel = [j for j in js if not flt or flt in (j["left"].lower(), j["right"].lower())]
+        if sel:
+            lines.append(f"declared relationships tests ({len(sel)}):")
+            lines += ["- " + R.join_text(j) for j in sel]
+        if layer.get("joins_cut"):
+            lines.append(f"({layer['joins_cut']} further declared relationships were not measured: start-up join limit)")
+        if off:
+            oj = [j for j in off.get("joins") or [] if not flt or flt in (j["l"].lower(), j["r"].lower())
+                  or flt in (j["l"].lower().rpartition(".")[2], j["r"].lower().rpartition(".")[2])]
+            lines.append(f"offline measured join pairs ({len(oj)}):")
+            lines += ["- " + R.off_join_text(j) for j in oj]
+        emit(lines or ["no joins recorded"], offset, "sl joins" + (f" {rest[0]}" if rest else ""))
+        return 0
+    if cmd == "search":
+        if not rest:
+            die("usage: sl search <term>")
+        term = " ".join(rest).lower()
+        hits = []
+        for root, kind, x in R.all_nodes(layer):
+            nm = R.node_name(kind, x)
+            if term in nm.lower() or term in (x.get("path") or "").lower():
+                hits.append((0, f"{kind[:-1]} {nm} ({root}, {x.get('path') or x.get('yml')})"))
+            elif term in (x.get("description") or "").lower():
+                hits.append((2, f"{kind[:-1]} {nm}: description mentions it"))
+            for c in x.get("columns") or []:
+                if term in c["name"].lower():
+                    hits.append((1, f"column {nm}.{c['name']} (declared)"))
+                elif term in (c.get("description") or "").lower():
+                    hits.append((2, f"column {nm}.{c['name']}: doc mentions it"))
+        for key, p in sorted((layer.get("profiles") or {}).items()):
+            for c in p.get("columns") or []:
+                if term in c["name"].lower():
+                    hits.append((1, f"column {key}.{c['name']} {c.get('type', '')} (warehouse)"))
+                elif any(term in str(v).lower() for v, _ in c.get("top") or []):
+                    hits.append((3, f"value in {key}.{c['name']}: " + ", ".join(str(v) for v, _ in c["top"] if term in str(v).lower())))
+        for r in (layer.get("warehouse") or {}).get("relations") or []:
+            if term in r[1].lower():
+                hits.append((0, f"relation {R.rkey(layer, r)} ({r[2]})"))
+        if off:
+            for key, t in sorted(off["tables"].items()):
+                if term in key.lower():
+                    hits.append((0, f"offline table {key} ({R.n_(t.get('rows'))} rows)"))
+                elif term in str(t.get("desc") or "").lower():
+                    hits.append((2, f"offline table {key}: description mentions it"))
+                for cn, c in (t.get("cols") or {}).items():
+                    if term in cn.lower():
+                        hits.append((1, f"offline column {key}.{cn} {c.get('t', '')}"))
+                    elif term in str(c.get("doc") or "").lower():
+                        hits.append((2, f"offline column {key}.{cn}: doc mentions it"))
+                    elif any(term in str(v).lower() for v, _ in c.get("top") or []):
+                        hits.append((3, f"offline value in {key}.{cn}: " + ", ".join(str(v) for v, _ in c["top"] if term in str(v).lower())))
+            for m in sorted(off.get("main") or {}):
+                if term in m.lower():
+                    hits.append((1, f"offline index MAIN.{m} ({R.n_(off['main'][m][0])} rows)"))
+            for m in sorted(off.get("lineage") or {}):
+                if term in m.lower():
+                    hits.append((1, f"reference model {m} reads: {', '.join(off['lineage'][m])}"))
+        hits = sorted(set(hits))
+        lines = [h for _, h in hits]
+        if len(lines) > R.SEARCH_LIMIT and not offset:
+            lines = lines[: R.SEARCH_LIMIT] + [f"[showing {R.SEARCH_LIMIT} of {len(hits)} matches (names first, then columns, "
+                                                 f"descriptions, values); `sl search {term} --offset {R.SEARCH_LIMIT}` for more]"]
+            print("\n".join(lines))
+            return 0
+        emit(lines or [f"no match for {term!r}"], offset, f"sl search {term}")
+        return 0
+    if cmd == "values":
+        if len(rest) < 2:
+            die("usage: sl values <relation> <column> [n]")
+        n = int(rest[2]) if len(rest) > 2 and rest[2].isdigit() else 20
+        rel = rest[0]
+        parts = [p.strip('"') for p in rel.split(".")]
+        if len(parts) == 1:
+            hits = [r for r in (layer.get("warehouse") or {}).get("relations") or [] if r[1].lower() == parts[0].lower()]
+            if not hits:
+                die(f"no relation named {rel} in the start-up relation list; give schema.table")
+            if len(hits) > 1:
+                die(f"{rel} names several relations: {', '.join(R.rkey(layer, r) for r in hits)}; give schema.table")
+            parts = [hits[0][3], hits[0][0], hits[0][1]] if R.multi(layer) and len(hits[0]) > 3 else [hits[0][0], hits[0][1]]
+        wh = core.Warehouse()
+        try:
+            q = core.qident(rest[1])
+            cols, rows, more = sage_build.run_query(
+                wh, f"select {q} as value, count(*) as n from {core.qrel(*parts[-2:]) if len(parts) < 3 else core.qrel(parts[-2], parts[-1], parts[-3])} "
+                    f"group by 1 order by 2 desc, 1 limit {n}", n, None, float(core.section("sage").get("query_timeout_s", 20)))
+            print(core.fmt_rows(cols, rows, more))
+        except Exception as e:  # noqa: BLE001
+            die(f"query failed: {str(e).strip()[:600]}")
+        finally:
+            wh.close()
+        return 0
+    die(f"unknown command {cmd!r} (`sl help`)", 2)
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)  # `sl ... | head` ends quietly
+    sys.exit(main(sys.argv[1:]))

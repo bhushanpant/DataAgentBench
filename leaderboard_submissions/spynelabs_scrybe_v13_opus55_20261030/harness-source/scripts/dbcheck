@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""Run task-derived SQL checks against the active dbt warehouse, read-only.
+
+Usage: dbcheck path/to/checks.json
+       dbcheck --finish  (reads $SCRYBE_WORKDIR/scrybe_checks.json)
+
+Format: {"project": "relative/dbt/project", "checks": [
+  {"name": "population", "requirement": "exact excerpt from the task",
+   "expect": "true", "sql": "select count(*) > 0 from ..."},
+  {"name": "grain", "requirement": "another exact excerpt from the task",
+   "expect": "empty", "sql": "select key from ... group by key having count(*) > 1"}
+]}
+
+`true` requires exactly one Boolean cell equal to True; NULL is a failure.
+`empty` requires no result rows; use IS NOT TRUE to catch NULL invariants.
+Checks and excerpts are authored by the agent from its task, not by an evaluator.
+Passing proves only these computations, not coverage or semantic correctness.
+The selected project's local profiles.yml takes precedence when present. Its
+DuckDB path is authoritative; a global DUCKDB_PATH cannot redirect these checks.
+Exit 0: declared checks pass; 1: a failed check or invalid/missing contract;
+2: incomplete execution (connection, SQL error, deadline). No warehouse writes.
+"""
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scrybe_core as core  # noqa: E402
+
+
+def normalized(text):
+    return " ".join(text.split()).casefold()
+
+
+def validate(spec, task, root):
+    if not isinstance(spec, dict):
+        raise ValueError("contract must be an object")
+    checks = spec.get("checks")
+    if not isinstance(checks, list) or not 1 <= len(checks) <= 64:
+        raise ValueError("checks must contain 1 to 64 task-derived checks")
+    project = (root / spec.get("project", ".")).resolve()
+    if not project.is_relative_to(root) or not (project / "dbt_project.yml").is_file():
+        raise ValueError("project must name a dbt project inside the task working directory")
+    names = set()
+    for c in checks:
+        if not isinstance(c, dict):
+            raise ValueError("each check must be an object")
+        name, requirement, sql = (c.get(k) for k in ("name", "requirement", "sql"))
+        if not all(isinstance(x, str) and x.strip() for x in (name, requirement, sql)):
+            raise ValueError("each check requires nonempty name, requirement and sql strings")
+        if name in names:
+            raise ValueError(f"duplicate check name: {name}")
+        names.add(name)
+        if normalized(requirement) not in normalized(task):
+            raise ValueError(f"{name}: requirement must quote an actual task excerpt; label assumptions separately")
+        if c.get("expect") not in ("true", "empty"):
+            raise ValueError(f"{name}: expect must be true or empty")
+        why = core.read_only_violation(sql)
+        if why or not re.match(r"^\s*(?:select|with)\b", core._strip_sql(sql), re.I):
+            raise ValueError(f"{name}: only one SELECT/WITH query is allowed ({why or 'not a SELECT'})")
+    return project, checks
+
+
+def execute(checks, wh, end):
+    rows = []
+    for c in checks:
+        r = {"name": c["name"], "requirement": c["requirement"], "expect": c["expect"]}
+        remaining = end - time.time()
+        if remaining < 1:
+            r.update(status="unchecked", error="contract execution budget exhausted")
+        else:
+            os.environ["SCRYBE_QUERY_TIMEOUT_S"] = str(max(1, min(30, int(remaining))))
+            try:
+                cols, data, more = wh.query(c["sql"], 5)
+                if c["expect"] == "true":
+                    passed = len(cols) == 1 and len(data) == 1 and not more and data[0][0] is True
+                else:
+                    passed = not data and not more and bool(cols)
+                r.update(status="pass" if passed else "fail", columns=cols, sample=data, truncated=more)
+            except Exception as e:  # noqa: BLE001
+                r.update(status="unchecked", error=f"{type(e).__name__}: {str(e)[:600]}")
+        rows.append(r)
+    return rows
+
+
+def main(argv=None):
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) != 1 or args[0] in ("--help", "-h"):
+        print(__doc__)
+        return 0 if args and args[0] in ("--help", "-h") else 1
+    root = Path(core.workdir()).resolve()
+    path = root / "scrybe_checks.json" if args[0] == "--finish" else Path(args[0]).resolve()
+    report = {"scope": "agent-authored task checks only; no completeness or correctness verdict",
+              "timestamp": time.time(), "checks": []}
+    wh = None
+    timeout_before = os.environ.get("SCRYBE_QUERY_TIMEOUT_S")
+    profiles_before = os.environ.get("DBT_PROFILES_DIR")
+    try:
+        raw = path.read_bytes()
+        if len(raw) > 256_000:
+            raise ValueError("contract exceeds 256 KB")
+        spec = json.loads(raw)
+        project, checks = validate(spec, core.task_text(), root)
+        report.update(contract_sha256=hashlib.sha256(raw).hexdigest(), project=str(project),
+                      project_files=core.file_hashes(str(project)))
+    except (OSError, ValueError, TypeError) as e:
+        report.update(status="invalid", error=str(e)[:600])
+        code = 1
+    else:
+        try:
+            os.environ["SCRYBE_QUERY_TIMEOUT_S"] = "30"
+            if (project / "profiles.yml").is_file():
+                os.environ["DBT_PROFILES_DIR"] = str(project)
+            wh = core.Warehouse(str(project), strict_project=True)
+            report["warehouse"] = {"engine": wh.engine, "location": wh.location}
+            if wh.engine == "duckdb":
+                wh.con.execute("SET enable_external_access = false")
+            left = core.deadline_left()
+            end = time.time() + min(90, max(0, left - 5) if left is not None else 90)
+            report["checks"] = execute(checks, wh, end)
+            statuses = {r["status"] for r in report["checks"]}
+            code = 2 if "unchecked" in statuses else 1 if "fail" in statuses else 0
+            report["status"] = "incomplete" if code == 2 else "failed" if code == 1 else "passed_declared_checks"
+        except Exception as e:  # noqa: BLE001
+            code = 2
+            report.update(status="incomplete", error=f"{type(e).__name__}: {str(e)[:600]}")
+        finally:
+            if wh:
+                wh.close()
+    if timeout_before is None:
+        os.environ.pop("SCRYBE_QUERY_TIMEOUT_S", None)
+    else:
+        os.environ["SCRYBE_QUERY_TIMEOUT_S"] = timeout_before
+    if profiles_before is None:
+        os.environ.pop("DBT_PROFILES_DIR", None)
+    else:
+        os.environ["DBT_PROFILES_DIR"] = profiles_before
+    core.save_json("contract_checks.json", report)
+    # File fingerprints are retained for the audit, not added to agent context.
+    print(json.dumps({k: v for k, v in report.items() if k != "project_files"}, default=str))
+    if code:
+        print("Reconcile these checks with the quoted task requirements and final built outputs. Fix justified "
+              "implementation/query errors and rerun dbcheck; do not weaken a requirement to obtain a pass. "
+              "A contradictory task requirement should be demonstrated and disclosed.")
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

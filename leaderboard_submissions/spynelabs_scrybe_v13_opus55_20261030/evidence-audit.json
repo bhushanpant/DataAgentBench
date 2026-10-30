@@ -1,0 +1,27 @@
+{
+  "counts": {
+    "sessions": 330,
+    "messages": 3892,
+    "tool_calls": 2963,
+    "tool_results": 2943,
+    "opus_calls": 1350,
+    "jlabel_records": 1533,
+    "errors": 0
+  },
+  "planner_models_observed": [
+    {
+      "model": "claude-opus-5-5",
+      "provider": "firstParty"
+    }
+  ],
+  "worker_models": [
+    {
+      "provider": "anthropic",
+      "model": "claude-opus-5-5",
+      "variant": "default"
+    }
+  ],
+  "review_items": [],
+  "review_status": "no_flagged_tool_requests",
+  "answer_consistency": "Every exported answer equals the final answer recorded in that trial."
+}
